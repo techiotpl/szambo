@@ -173,6 +173,8 @@ app.post('/admin/create-device-with-user',auth,adminOnly,async(req,res)=>{
 app.post('/uplink', async (req, res) => {
   try {
     const { dev_eui, object } = req.body;
+    console.log('Received uplink:', JSON.stringify(req.body));
+
     if (!dev_eui) return res.status(400).send('dev_eui missing');
 
     // Pobierz device_id

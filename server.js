@@ -170,31 +170,39 @@ app.post('/admin/create-device-with-user',auth,adminOnly,async(req,res)=>{
   }catch(e){ console.error(e); res.status(500).send(e.message);} });
 
 // ── FIXED /uplink ENDPOINT (no syntax error) ────────────────────────────────
+// server.js
+
 app.post('/uplink', async (req, res) => {
   try {
-    const { dev_eui, object } = req.body;
-    console.log('Received uplink:', JSON.stringify(req.body));
+    // 1. Wyciągnij devEUI
+    const devEui = req.body.dev_eui
+                || req.body.devEUI
+                || req.body.deviceInfo?.devEui;
+    if (!devEui) {
+      return res.status(400).send('dev_eui missing');
+    }
 
-    if (!dev_eui) return res.status(400).send('dev_eui missing');
-
-    // Pobierz device_id
+    // 2. Zlokalizuj deviceId w bazie
     const { rows } = await db.query(
       'SELECT id FROM devices WHERE serial_number = $1',
-      [dev_eui]
+      [devEui]
     );
-    if (!rows.length) return res.status(404).send('Unknown device');
+    if (!rows.length) {
+      return res.status(404).send('Unknown device');
+    }
     const deviceId = rows[0].id;
 
-    // Wyciągnij interesujące Cię zmienne (możesz dodać kolejne pola z object)
+    // 3. Odczytaj zmienne z payloadu
+    const object = req.body.object || {};
     const distance = object.distance ?? null;
     const voltage  = object.voltage  ?? null;
 
-    // Zbuduj obiekt JSON z aktualnymi wartościami
+    // 4. Przygotuj obiekt do zapisania
     const varsToSave = {};
     if (distance !== null) varsToSave.distance = distance;
-    if (voltage  !== null) varsToSave.battery  = voltage;
+    if (voltage  !== null) varsToSave.voltage  = voltage;
 
-    // Scal z istniejącym JSON-em w kolumnie params
+    // 5. Scal z istniejącym JSON-em w params
     await db.query(
       `UPDATE devices
          SET params = coalesce(params, '{}'::jsonb) || $2::jsonb
@@ -202,9 +210,10 @@ app.post('/uplink', async (req, res) => {
       [deviceId, JSON.stringify(varsToSave)]
     );
 
+    console.log(`Saved uplink for ${devEui}:`, varsToSave);
     res.send('OK');
   } catch (err) {
-    console.error(err);
+    console.error('Error in /uplink:', err);
     res.status(500).send('uplink error');
   }
 });

@@ -169,5 +169,25 @@ app.post('/uplink',async(req,res)=>{
   }catch(err){ console.error(err); res.status(500).send('uplink error'); }
 });
 
+// tylko jeśli ustawione BOOTSTRAP_SECRET w env
+if (process.env.BOOTSTRAP_SECRET) {
+  app.post('/bootstrap-admin', async (req, res) => {
+    if (req.headers['x-bootstrap-secret'] !== process.env.BOOTSTRAP_SECRET) {
+      return res.status(403).send('Forbidden');
+    }
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).send('email & password required');
+    }
+    const hash = await bcrypt.hash(password, 10);
+    await db.query(
+      'INSERT INTO users (email, password_hash, role) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [email.toLowerCase(), hash, 'admin']
+    );
+    res.send('★ admin ready');
+  });
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT,()=>console.log(`TechioT backend listening on ${PORT}`));

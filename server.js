@@ -101,6 +101,26 @@ function auth(req,res,next){
 }
 function adminOnly(req,res,next){ if(req.user.role!=='admin') return res.status(403).send('Forbidden'); next(); }
 
+// Dopisz w server.js *po* middleware auth
+app.get('/device/:serial_number/vars', auth, async (req, res) => {
+  const { serial_number } = req.params;
+  const { rows } = await db.query(
+    `SELECT
+       params ->> 'distance' AS distance,
+       params ->> 'battery'  AS battery
+     FROM devices
+     WHERE serial_number = $1`,
+    [serial_number]
+  );
+  if (!rows.length) return res.status(404).send('Device not found');
+  res.json({
+    serial_number,
+    distance: rows[0].distance,
+    battery:  rows[0].battery
+  });
+});
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ROUTES
 // ─────────────────────────────────────────────────────────────────────────────

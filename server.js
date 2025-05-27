@@ -150,23 +150,41 @@ app.post('/admin/create-device-with-user',auth,adminOnly,async(req,res)=>{
   }catch(e){ console.error(e); res.status(500).send(e.message);} });
 
 // ── FIXED /uplink ENDPOINT (no syntax error) ────────────────────────────────
-app.post('/uplink',async(req,res)=>{
-  try{
+app.post('/uplink', async (req, res) => {
+  try {
     const { dev_eui, object } = req.body;
-    if(!dev_eui) return res.status(400).send('dev_eui missing');
+    if (!dev_eui) return res.status(400).send('dev_eui missing');
 
-    const { rows } = await db.query('SELECT id FROM devices WHERE serial_number=$1',[dev_eui]);
-    if(!rows.length) return res.status(404).send('Unknown device');
-
+    // Pobierz device_id
+    const { rows } = await db.query(
+      'SELECT id FROM devices WHERE serial_number = $1',
+      [dev_eui]
+    );
+    if (!rows.length) return res.status(404).send('Unknown device');
     const deviceId = rows[0].id;
-    const distance = object?.distance ?? null;
 
-    await db.query(`UPDATE devices
-        SET params = jsonb_set(coalesce(params, '{}'::jsonb), '{last_distance}', to_jsonb($2::text))
-        WHERE id = $1`, [deviceId, String(distance ?? '')]);
+    // Wyciągnij interesujące Cię zmienne (możesz dodać kolejne pola z object)
+    const distance = object.distance ?? null;
+    const voltage  = object.voltage  ?? null;
+
+    // Zbuduj obiekt JSON z aktualnymi wartościami
+    const varsToSave = {};
+    if (distance !== null) varsToSave.distance = distance;
+    if (voltage  !== null) varsToSave.battery  = voltage;
+
+    // Scal z istniejącym JSON-em w kolumnie params
+    await db.query(
+      `UPDATE devices
+         SET params = coalesce(params, '{}'::jsonb) || $2::jsonb
+       WHERE id = $1`,
+      [deviceId, JSON.stringify(varsToSave)]
+    );
 
     res.send('OK');
-  }catch(err){ console.error(err); res.status(500).send('uplink error'); }
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('uplink error');
+  }
 });
 
 

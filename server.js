@@ -218,35 +218,40 @@ app.post('/uplink', async (req, res) => {
   }
 });
 
-// ───────────── GET params ─────────────
+/* ─────── GET kolumn urządzenia ─────── */
 app.get('/device/:serial/params', async (req, res) => {
   const { serial } = req.params;
-  try {
-    const { rows } = await db.query(
-      'SELECT params FROM devices WHERE serial_number = $1',
-      [serial]
-    );
-    if (!rows.length) return res.status(404).send('Not found');
-    res.json(rows[0].params || {});
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
+  const q = `
+    SELECT phone, phone2, tel_do_szambiarza,
+           red_cm, sms_limit, email_limit, abonament_expiry
+      FROM devices
+     WHERE serial_number = $1`;
+  const { rows } = await db.query(q, [serial]);
+  if (!rows.length) return res.status(404).send('Not found');
+  res.json(rows[0]);
 });
 
-// ───────────── PATCH params ─────────────
+/* ─────── PATCH kolumn urządzenia ─────── */
 app.patch('/device/:serial/params', async (req, res) => {
   const { serial } = req.params;
-  const updates = req.body; // oczekujemy JSONa { key: value, … }
-  try {
-    await db.query(
-      'UPDATE devices SET params = params || $1::jsonb WHERE serial_number = $2',
-      [JSON.stringify(updates), serial]
-    );
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).send(err.message);
+  const body = req.body; // { phone: "...", red_cm: 40, ... }
+
+  // budujemy dynamicznie SET col=$, …:
+  const cols = [];
+  const vals = [];
+  let i = 1;
+  for (const [k, v] of Object.entries(body)) {
+    cols.push(`${k} = $${i++}`);
+    vals.push(v);
   }
+  if (!cols.length) return res.sendStatus(400);
+
+  vals.push(serial); // ostatni parametr do WHERE
+  const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
+  await db.query(q, vals);
+  res.sendStatus(200);
 });
+
 
 
 

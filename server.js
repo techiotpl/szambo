@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS devices (
   eui TEXT,
   phone TEXT,
   phone2 TEXT,
+  tel_do_szambiarza TEXT
   street TEXT,
   sms_limit INT  DEFAULT 30,
   email_limit INT DEFAULT 30,

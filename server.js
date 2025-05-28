@@ -218,6 +218,35 @@ app.post('/uplink', async (req, res) => {
   }
 });
 
+// ───────────── GET params ─────────────
+app.get('/device/:serial/params', async (req, res) => {
+  const { serial } = req.params;
+  try {
+    const { rows } = await db.query(
+      'SELECT params FROM devices WHERE serial_number = $1',
+      [serial]
+    );
+    if (!rows.length) return res.status(404).send('Not found');
+    res.json(rows[0].params || {});
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// ───────────── PATCH params ─────────────
+app.patch('/device/:serial/params', async (req, res) => {
+  const { serial } = req.params;
+  const updates = req.body; // oczekujemy JSONa { key: value, … }
+  try {
+    await db.query(
+      'UPDATE devices SET params = params || $1::jsonb WHERE serial_number = $2',
+      [JSON.stringify(updates), serial]
+    );
+    res.sendStatus(200);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
 
 
 

@@ -222,10 +222,66 @@ app.post('/uplink', async (req, res) => {
     }
     const deviceId = rows[0].id;
 
-    // 3. Odczytaj zmienne z payloadu
-    const object = req.body.object || {};
-    const distance = object.distance ?? null;
-    const voltage  = object.voltage  ?? null;
+// 3. Odczytaj zmienne z payloadu
+const object   = req.body.object || {};
+const distance = object.distance ?? null;   // cm
+const voltage  = object.voltage  ?? null;   // V
+
+/* ────────────────────────────────────────────────────────────────
+   Atomowe UPDATE:
+     • zapisuje distance_cm
+     • przełącza trigger_dist:
+         0→1 gdy  distance ≤ red_cm
+         1→0 gdy  distance ≥ empty_cm      (domyślnie 100-150 cm)
+   Zwraca wybrane kolumny do dalszej logiki.
+──────────────────────────────────────────────────────────────── */
+const result = await db.query(
+  `UPDATE devices
+      SET distance_cm = $2,
+          trigger_dist = CASE
+              WHEN $2 <= red_cm   AND trigger_dist = FALSE THEN TRUE
+              WHEN $2 >= empty_cm AND trigger_dist = TRUE  THEN FALSE
+              ELSE trigger_dist
+          END,
+          params = coalesce(params,'{}'::jsonb)
+                   || jsonb_build_object('distance',$2,'voltage',$3)
+    WHERE id = $1
+    RETURNING trigger_dist, phone, phone2, tel_do_szambiarza,
+              sms_limit, red_cm, distance_cm`,
+  [deviceId, distance, voltage]
+);
+
+const row = result.rows[0];
+console.log(`Saved uplink for ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);
+
+/* ──  wysyłamy SMS tylko, gdy flaga właśnie przeszła z FALSE→TRUE  ── */
+if (distance !== null && distance <= row.red_cm && row.trigger_dist === true) {
+  // last update *set* the flag → SMS jeszcze nie wysłany
+  if (row.sms_limit <= 0) {
+    console.log(`SMS limit exhausted for ${devEui}`);
+  } else {
+    const numbers = [row.phone, row.phone2, row.tel_do_szambiarza]
+      .filter(n => n && n.length >= 9)
+      .map(n => n.startsWith('+48') ? n : '+48' + n);
+    if (numbers.length) {
+      try {
+        await sendSMS(numbers,
+          `Alarm: poziom ${distance} cm ≤ próg ${row.red_cm} cm`);
+        // odejmij limit tyle razy, ile numerów
+        await db.query(
+          'UPDATE devices SET sms_limit = GREATEST(0, sms_limit - $1) WHERE id=$2',
+          [numbers.length, deviceId]
+        );
+        console.log(`SMS sent to ${numbers.join(', ')} (${devEui})`);
+      } catch (err) {
+        console.error('SMS error:', err.message);
+      }
+    }
+  }
+}
+
+return res.send('OK');   // ← koniec try
+
 
     // 4. Przygotuj obiekt do zapisania
     const varsToSave = {};

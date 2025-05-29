@@ -237,19 +237,23 @@ const voltage  = object.voltage  ?? null;   // V
 ──────────────────────────────────────────────────────────────── */
 const result = await db.query(
   `UPDATE devices
-      SET distance_cm = $2,
+      SET distance_cm = $2::int,
           trigger_dist = CASE
-              WHEN $2 <= red_cm   AND trigger_dist = FALSE THEN TRUE
-              WHEN $2 >= empty_cm AND trigger_dist = TRUE  THEN FALSE
+              WHEN $2::int <= red_cm   AND trigger_dist = FALSE THEN TRUE
+              WHEN $2::int >= empty_cm AND trigger_dist = TRUE  THEN FALSE
               ELSE trigger_dist
           END,
           params = coalesce(params,'{}'::jsonb)
-                   || jsonb_build_object('distance',$2,'voltage',$3)
+                   || jsonb_build_object(
+                        'distance', $2::int,
+                        'voltage',  $3::numeric
+                      )
     WHERE id = $1
     RETURNING trigger_dist, phone, phone2, tel_do_szambiarza,
               sms_limit, red_cm, distance_cm`,
   [deviceId, distance, voltage]
 );
+
 
 const row = result.rows[0];
 console.log(`Saved uplink for ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);

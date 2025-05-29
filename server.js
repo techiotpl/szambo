@@ -121,6 +121,35 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
   });
 });
 
+// server.js  (po middleware adminOnly)
+app.get('/admin/users-with-devices', auth, adminOnly, async (req,res)=>{
+  const q = `
+    SELECT u.id, u.email, u.name,
+           json_agg(d.*) AS devices
+      FROM users u
+      LEFT JOIN devices d ON d.user_id = u.id
+     GROUP BY u.id`;
+  const { rows } = await db.query(q);
+  res.json(rows);
+});
+
+app.patch('/admin/device/:serial/params', auth, adminOnly, async (req,res)=>{
+  // body = { phone:'...', red_cm:42, ... }  ← dowolny podzbiór
+  const updates = [];
+  const vals    = [];
+  let i = 1;
+  for (const [k,v] of Object.entries(req.body)) {
+    updates.push(`${k}=$${i++}`);  vals.push(v);
+  }
+  vals.push(req.params.serial);
+  await db.query(`UPDATE devices SET ${updates.join(',')} WHERE serial_number=$${i}`, vals);
+  res.send('updated');
+});
+
+
+
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROUTES

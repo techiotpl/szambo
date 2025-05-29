@@ -181,6 +181,32 @@ app.put('/device/:id/phone',auth,async(req,res)=>{
   res.send('Updated');
 });
 
+
+/**
+ * DELETE /admin/user/:email
+ * – usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
+ */
+app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
+  const email = req.params.email.toLowerCase();
+  try {
+    const result = await db.query(
+      'DELETE FROM users WHERE email = $1 RETURNING id',
+      [email]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).send(`User ${email} not found`);
+    }
+    return res.send(`Deleted user ${email} and their devices`);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message);
+  }
+});
+
+
+
+
+
 // create device+user (simplified – same as v0.2)
 app.post('/admin/create-device-with-user',auth,adminOnly,async(req,res)=>{
   try{

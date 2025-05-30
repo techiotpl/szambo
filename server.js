@@ -228,142 +228,126 @@ app.post('/admin/create-device-with-user',auth,adminOnly,async(req,res)=>{
 // ── FIXED /uplink ENDPOINT (no syntax error) ────────────────────────────────
 // server.js
 
+/* ──────────────────────────────────────────────────────────────
+ *  POST /uplink      – przychodzą pomiary z Helium
+ *  • zapis distance / voltage w params
+ *  • obsługa trigger_dist, empty_cm / empty_ts
+ *  • wysyłka SMS  (user + szambiarz)  przy alarmie
+ * ──────────────────────────────────────────────────────────── */
 app.post('/uplink', async (req, res) => {
   try {
-    // 1. Wyciągnij devEUI
+    /* 1. devEUI ----------------------------------------------------------- */
     const devEui = req.body.dev_eui
                 || req.body.devEUI
                 || req.body.deviceInfo?.devEui;
-    if (!devEui) {
-      return res.status(400).send('dev_eui missing');
-    }
+    if (!devEui) return res.status(400).send('dev_eui missing');
 
-    // 2. Zlokalizuj deviceId w bazie
-    const { rows } = await db.query(
-      'SELECT id FROM devices WHERE serial_number = $1',
+    /* 2. urządzenie w bazie ---------------------------------------------- */
+    const dev = await db.query(
+      `SELECT id, phone, phone2, tel_do_szambiarza, street,
+              red_cm, trigger_dist, sms_limit
+         FROM devices
+        WHERE serial_number = $1`,
       [devEui]
     );
-    if (!rows.length) {
-      return res.status(404).send('Unknown device');
+    if (!dev.rowCount) return res.status(404).send('Unknown device');
+    const d = dev.rows[0];
+
+    /* 3. payload ---------------------------------------------------------- */
+    const obj      = req.body.object || {};
+    const distance = obj.distance ?? null;   // cm
+    const voltage  = obj.voltage  ?? null;   // V
+    if (distance === null) return res.send('noop (no distance)');
+
+    /* 4. scal z JSONB + zapisz distance_cm / trigger_dist / empty_* ------- */
+    const varsToSave = { distance, voltage };
+    const q = `
+      UPDATE devices
+         SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
+             distance_cm  = $2::int,
+             /* ── flaga alarmowa ── */
+             trigger_dist = CASE
+                             WHEN $2::int <= red_cm THEN TRUE      -- ALARM
+                             WHEN $2::int >= empty_cm THEN FALSE   -- RESET
+                             ELSE trigger_dist
+                           END,
+             /* ── punkt pustego zbiornika ── */
+             empty_cm     = CASE
+                             WHEN trigger_dist AND $2::int >= empty_cm THEN $2::int
+                             ELSE empty_cm
+                           END,
+             empty_ts     = CASE
+                             WHEN trigger_dist AND $2::int >= empty_cm THEN now()
+                             ELSE empty_ts
+                           END
+       WHERE id = $1
+       RETURNING trigger_dist, sms_limit, phone, phone2,
+                 tel_do_szambiarza, street, red_cm`;
+    const r = await db.query(q, [d.id, distance, varsToSave]);
+    const row = r.rows[0];
+    console.log(`Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);
+
+    /* 5. SMS przy przejściu FALSE → TRUE --------------------------------- */
+    if (!d.trigger_dist && row.trigger_dist && row.sms_limit > 0) {
+      const norm = p => p && p.length >= 9
+          ? (p.startsWith('+48') ? p : '+48'+p) : null;
+      const phones   = [norm(row.phone), norm(row.phone2)].filter(Boolean);
+      const szambTel = norm(row.tel_do_szambiarza);
+
+      /* 5a) user --------------------------------------------------------- */
+      if (phones.length && row.sms_limit >= phones.length) {
+        await sendSMS(phones,
+          `Poziom ${distance} cm przekroczyl prog ${row.red_cm} cm`);
+        row.sms_limit -= phones.length;
+      }
+      /* 5b) szambiarz ---------------------------------------------------- */
+      if (szambTel && row.sms_limit > 0) {
+        await sendSMS([szambTel],
+          `${row.street || '(brak adresu)'} – zbiornik pelny. `
+          + `Prosze o oproznienie. Tel: ${phones[0]||'brak'}`);
+        row.sms_limit -= 1;
+      }
+      /* 5c) aktualizacja limitu ----------------------------------------- */
+      await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2',
+                     [row.sms_limit, d.id]);
     }
-    const deviceId = rows[0].id;
 
-// 3. Parsowanie payloadu
-const object   = req.body.object || {};
-const distance = object.distance ?? null;  // cm
-const voltage  = object.voltage  ?? null;  // V
-
-/* ------------------------------------------------------------------
-   ➊  Pobierz poprzednią wartość flagi (1 szybki SELECT)
------------------------------------------------------------------- */
-const prev = await db.query(
-  `SELECT trigger_dist, sms_limit
-     FROM devices
-    WHERE id = $1`,
-  [deviceId]
-);
-const wasTriggered = prev.rows[0].trigger_dist;   // TRUE / FALSE
-let smsLimit       = prev.rows[0].sms_limit;      // INT
-
-/* ------------------------------------------------------------------
-   ➋  UPDATE  – zapisujemy distance, przełączamy flagę
------------------------------------------------------------------- */
-const result = await db.query(
-  `UPDATE devices
-      SET distance_cm  = $2::int,
-          trigger_dist = CASE
-             WHEN $2::int <= red_cm   THEN TRUE        -- alarm
-             WHEN $2::int >= empty_cm THEN FALSE       -- reset
-             ELSE trigger_dist
-          END,
-          params = coalesce(params,'{}'::jsonb)
-                 || jsonb_build_object('distance',$2::int,'voltage',$3::numeric)
-    WHERE id = $1
-    RETURNING trigger_dist, phone, phone2, tel_do_szambiarza,
-              street, sms_limit, red_cm, distance_cm`,
-  [deviceId, distance, voltage]
-);
-
-const row = result.rows[0];
-const nowTriggered = row.trigger_dist;
-
-console.log(`Saved uplink for ${devEui}: ${distance} cm, flag=${nowTriggered}`);
-
-/* ------------------------------------------------------------------
-   ➌  SMS tylko Gdy  wasTriggered = FALSE  ∧  nowTriggered = TRUE
------------------------------------------------------------------- */
-if (!wasTriggered && nowTriggered && distance !== null && distance <= row.red_cm) {
-
-  // ZBIERAMY NUMERY
-  const clean = n => n && n.length >= 9
-        ? (n.startsWith('+48') ? n : '+48'+n) : null;
-  const userNumbers      = [clean(row.phone), clean(row.phone2)].filter(Boolean);
-  const szambiarzNumber  = clean(row.tel_do_szambiarza);
-
-  /* 3a) SMS do użytkownika */
-  if (userNumbers.length && smsLimit >= userNumbers.length) {
-    try {
-      await sendSMS(userNumbers,
-        `Poziom w zbiorniku ${distance} i przekroczyl wartosc  alarmowa ${row.red_cm} cm`);
-      smsLimit -= userNumbers.length;
-      console.log(`SMS sent to ${userNumbers.join(', ')}.`);
-    } catch(e) { console.error('User SMS error:', e.message); }
-  }
-
-  /* 3b) SMS do szambiarza (z ulicą) */
-  if (szambiarzNumber && smsLimit > 0) {
-    try {
-      await sendSMS([szambiarzNumber],
-        `${row.street || '(brak adresu)'} zbiornik pelny. Prosze o oproznienie i potwierdzenie przyjazdu. Tel:${userNumbers[0]||'brak'}`);
-      smsLimit -= 1;
-      console.log(`SMS sent to szambiarz ${szambiarzNumber}.`);
-    } catch(e) { console.error('Szambiarz SMS error:', e.message); }
-  }
-
-  /* dekrementujemy limit w bazie */
-  await db.query(
-    'UPDATE devices SET sms_limit = $1 WHERE id=$2',
-    [smsLimit, deviceId]
-  );
-}
-
-return res.send('OK');
-
-
-
-    // 4. Przygotuj obiekt do zapisania
-    const varsToSave = {};
-    if (distance !== null) varsToSave.distance = distance;
-    if (voltage  !== null) varsToSave.voltage  = voltage;
-
-    // 5. Scal z istniejącym JSON-em w params
-    await db.query(
-      `UPDATE devices
-         SET params = coalesce(params, '{}'::jsonb) || $2::jsonb
-       WHERE id = $1`,
-      [deviceId, JSON.stringify(varsToSave)]
-    );
-
-    console.log(`Saved uplink for ${devEui}:`, varsToSave);
-    res.send('OK');
+    return res.send('OK');
   } catch (err) {
     console.error('Error in /uplink:', err);
-    res.status(500).send('uplink error');
+    return res.status(500).send('uplink error');
   }
 });
 
+
+    
 /* ─────── GET kolumn urządzenia ─────── */
-app.get('/device/:serial/params', async (req, res) => {
-  const { serial } = req.params;
+/* ------------------------------------------------------------------
+ *  GET /device/:serial_number/vars
+ *  Zwraca distance, voltage, empty_cm / empty_ts  i policzony %.
+ * ----------------------------------------------------------------- */
+app.get('/device/:serial_number/vars', auth, async (req, res) => {
+  const { serial_number } = req.params;
   const q = `
-    SELECT phone, phone2, tel_do_szambiarza,
-           red_cm, sms_limit, email_limit, abonament_expiry
-      FROM devices
-     WHERE serial_number = $1`;
-  const { rows } = await db.query(q, [serial]);
-  if (!rows.length) return res.status(404).send('Not found');
+    SELECT
+      (params ->> 'distance')::int                      AS distance,
+      (params ->> 'voltage')::numeric                   AS voltage,
+      empty_cm,
+      empty_ts,
+      CASE
+        WHEN empty_cm IS NOT NULL
+          THEN ROUND( ( (params->>'distance')::int - empty_cm )::numeric
+                      / (0-empty_cm) * 100 )
+      END                                              AS procent
+      /* możesz dodać tu battery, jeśli zapisujesz ją w params */
+    FROM devices
+    WHERE serial_number = $1
+    LIMIT 1`;
+  const { rows } = await db.query(q, [serial_number]);
+  if (!rows.length) return res.status(404).send('Device not found');
   res.json(rows[0]);
 });
+
 
 /* ─────── PATCH kolumn urządzenia ─────── */
 app.patch('/device/:serial/params', async (req, res) => {

@@ -279,6 +279,9 @@ app.post('/uplink', async (req, res) => {
     const voltage  = obj.voltage  ?? null;   // V
     if (distance === null) return res.send('noop (no distance)');
 
+    /* 3a. co dokładnie zapisujemy w kolumnie JSONB --------------------- */
+   const varsToSave = { distance, voltage };   //  <<<  **DODANE**
+
 /* 4. scal z JSONB + logika trigger_dist / empty_* */
 const q = `
   UPDATE devices
@@ -303,13 +306,17 @@ const q = `
    RETURNING trigger_dist, sms_limit, phone, phone2,
              tel_do_szambiarza, street, red_cm`;
 
-const varsToSave = { distance, voltage };                    //  <-- NOWE
+             tel_do_szambiarza, street, red_cm`;
 
-const r   = await db.query(q, [ d.id, distance,
-                                JSON.stringify(varsToSave) ]);
-const row = r.rows[0];                                          //  <<<  DODANE
-
-console.log(`Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);
+    const r   = await db.query(
+                 q,
+                 [ d.id, distance,
+                   JSON.stringify(varsToSave) ]          //  <<< stringify
+               );
+    const row = r.rows[0];                              //  <<<  **DODANE**
+    console.log(
+      `Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`
+    );
 
 
 

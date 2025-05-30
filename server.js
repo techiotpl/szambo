@@ -133,6 +133,26 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req,res)=>{
   res.json(rows);
 });
 
+/* ------------------------------------------------------------------
+ *  GET /device/:serial/params
+ *  Zwraca pola konfiguracyjne widoczne w „Ustawieniach”.
+ * ----------------------------------------------------------------- */
+app.get('/device/:serial/params', auth, async (req, res) => {
+  const { serial } = req.params;
+  const q = `
+    SELECT phone, phone2, tel_do_szambiarza,
+           red_cm, sms_limit, email_limit,
+           empty_cm, empty_ts, abonament_expiry
+      FROM devices
+     WHERE serial_number = $1`;
+  const { rows } = await db.query(q, [serial]);
+  if (!rows.length) return res.status(404).send('Not found');
+  res.json(rows[0]);
+});
+
+
+
+
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req,res)=>{
   // body = { phone:'...', red_cm:42, ... }  ← dowolny podzbiór
   const updates = [];

@@ -278,7 +278,12 @@ app.post('/uplink', async (req, res) => {
     const voltage  = obj.voltage  ?? null;        // V
     if (distance === null) return res.send('noop (no distance)');
 
-    const varsToSave = { distance, voltage };
+        // ➊ dodajemy znacznik czasu ISO-8601
+    const varsToSave = {
+      distance,
+      voltage,
+      ts: new Date().toISOString()
+    };
 
     /* 4) zapis + nowa flaga ---------------------------------------------- */
     const q = `
@@ -296,7 +301,7 @@ app.post('/uplink', async (req, res) => {
     const { rows:[row] } =
           await db.query(q, [ d.id, distance, JSON.stringify(varsToSave) ]);
 
-    /* 4a) jeżeli nastąpiło przejście TRUE → FALSE  → zapisz empty_* ------ */
+    /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
     if (d.old_flag && !row.new_flag) {
       await db.query(
         'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
@@ -312,7 +317,7 @@ app.post('/uplink', async (req, res) => {
     + `red=${ref}; flag ${d.old_flag}→${row.new_flag}`
     );
 
-    /* 5) SMS tylko przy starej FALSE i nowej TRUE ------------------------ */
+    /* 5) SMS alarmowe ---------------------------------------------------- */
     if (!d.old_flag && row.new_flag && row.sms_limit > 0) {
       const norm = p => p && p.length >= 9
           ? (p.startsWith('+48') ? p : '+48'+p) : null;

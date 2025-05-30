@@ -285,40 +285,42 @@ app.post('/uplink', async (req, res) => {
 const varsToSave = { distance, voltage };
 
 
-/* 4 – pełna logika w jednym zapytaniu ,  logika wysyłania   */ 
+/* 4 – pełna logika z CTE, która ZAWSZE zwraca wiersz --------------- */
 const q = `
 WITH upd AS (
   UPDATE devices
      SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
          distance_cm  = $2::int,
-         /* alarm ON, ale nie wyłączamy tu jeszcze */
          trigger_dist = CASE
                           WHEN $2::int <= red_cm THEN TRUE
                           ELSE trigger_dist
                         END
    WHERE id = $1
    RETURNING *
+), reset AS (
+  UPDATE devices d
+     SET trigger_dist = FALSE,
+         empty_cm     = upd.distance_cm,
+         empty_ts     = now()
+    FROM upd
+   WHERE d.id   = upd.id
+     AND upd.trigger_dist
+     AND $2::int >= COALESCE(upd.empty_cm,150)
+   RETURNING d.*
 )
-/* ─── krok 2 – reset, gdy było TRUE a teraz dystans ≥ empty_cm ─── */
-UPDATE devices d
-   SET trigger_dist = FALSE,
-       empty_cm     = upd.distance_cm,
-       empty_ts     = now()
-  FROM upd
- WHERE d.id = upd.id
-   AND upd.trigger_dist        /* STARA wartość = TRUE przed resetem */
-   AND $2::int >= COALESCE(upd.empty_cm,150)     /* próg „pusty”     */
-RETURNING d.trigger_dist,           /* po wszystkich zmianach */
-          d.sms_limit,
-          d.phone, d.phone2,
-          d.tel_do_szambiarza,
-          d.street, d.red_cm,
-          d.empty_cm              /* do wyliczenia %         */`;
+/* ─── zawsze jedna krotka ─── */
+SELECT * FROM reset
+UNION ALL
+SELECT * FROM upd
+LIMIT 1;`;
 
 const { rows:[row] } =
-  await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
+  await db.query(q, [ d.id,
+                      distance,
+                      JSON.stringify({ distance, voltage })
+                    ]);
 
-/* mały log diagnostyczny */
+/* defensywnie – jeżeli empty_cm NULL ⇒ 150 */
 const emptyRef = row.empty_cm ?? 150;
 const percent  = Math.round(((distance - emptyRef) / (0 - emptyRef)) * 100);
 
@@ -326,6 +328,7 @@ console.log(
   `Saved uplink ${devEui}: ${distance} cm (≈${percent}%); `
 + `red=${row.red_cm}; flag=${row.trigger_dist}`
 );
+
 
 
 

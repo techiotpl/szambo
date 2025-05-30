@@ -305,8 +305,12 @@ const q = `
 
 const varsToSave = { distance, voltage };                    //  <-- NOWE
 
-const r = await db.query(q, [ d.id, distance,
-                              JSON.stringify(varsToSave) ]); //  <-- POPRAWKA
+const r   = await db.query(q, [ d.id, distance,
+                                JSON.stringify(varsToSave) ]);
+const row = r.rows[0];                                          //  <<<  DODANE
+
+console.log(`Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);
+
 
 
     /* 5. SMS przy przejściu FALSE → TRUE --------------------------------- */

@@ -284,51 +284,42 @@ app.post('/uplink', async (req, res) => {
 /* ─── 3a. co dokładnie zapisujemy w JSONB ───────────────────────── */
 const varsToSave = { distance, voltage };
 
-/* ─── 4. UPDATE + logika flagi / opróżnienia ────────────────────── */
+
+/* 4 – pełna logika w jednym zapytaniu ,  logika wysyłania   */ 
 const q = `
-UPDATE devices
-   SET params      = coalesce(params,'{}'::jsonb) || $3::jsonb,
-       distance_cm = $2::int,
+WITH upd AS (
+  UPDATE devices
+     SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
+         distance_cm  = $2::int,
+         /* alarm ON, ale nie wyłączamy tu jeszcze */
+         trigger_dist = CASE
+                          WHEN $2::int <= red_cm THEN TRUE
+                          ELSE trigger_dist
+                        END
+   WHERE id = $1
+   RETURNING *
+)
+/* ─── krok 2 – reset, gdy było TRUE a teraz dystans ≥ empty_cm ─── */
+UPDATE devices d
+   SET trigger_dist = FALSE,
+       empty_cm     = upd.distance_cm,
+       empty_ts     = now()
+  FROM upd
+ WHERE d.id = upd.id
+   AND upd.trigger_dist        /* STARA wartość = TRUE przed resetem */
+   AND $2::int >= COALESCE(upd.empty_cm,150)     /* próg „pusty”     */
+RETURNING d.trigger_dist,           /* po wszystkich zmianach */
+          d.sms_limit,
+          d.phone, d.phone2,
+          d.tel_do_szambiarza,
+          d.street, d.red_cm,
+          d.empty_cm              /* do wyliczenia %         */`;
 
-       /* ── flaga alarmowa ── */
-       trigger_dist = CASE
-                        WHEN $2::int <= red_cm                 THEN TRUE
-                        WHEN $2::int >= coalesce(empty_cm,150) THEN FALSE
-                        ELSE trigger_dist
-                      END,
+const { rows:[row] } =
+  await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
 
-       /* ── punkt „pusty zbiornik” – TYLKO gdy
-              *poprzednia* flaga była TRUE                      */
-       empty_cm = CASE
-                    WHEN $4::boolean                           /* prev flag */
-                     AND $2::int >= coalesce(empty_cm,150)
-                      THEN $2::int
-                    ELSE empty_cm
-                  END,
-       empty_ts = CASE
-                    WHEN $4::boolean
-                     AND $2::int >= coalesce(empty_cm,150)
-                      THEN now()
-                    ELSE empty_ts
-                  END
- WHERE id = $1
- RETURNING trigger_dist,                          /* nowa flaga           */
-           sms_limit,
-           phone, phone2, tel_do_szambiarza,
-           street, red_cm,
-           empty_cm                               /* do wyliczenia %      */`;
-
-/* $1=id, $2=distance, $3=JSON, $4=poprzednia flaga */
-const { rows:[row] } = await db.query(
-  q,
-  [ d.id,
-    distance,
-    JSON.stringify(varsToSave),
-    d.trigger_dist                                  /* ← stara flaga       */
-]);
-
-/* ─── mały log diagnostyczny ────────────────────────────────────── */
-const emptyRef = row.empty_cm ?? 150;               // domyślne 150 cm
+/* mały log diagnostyczny */
+const emptyRef = row.empty_cm ?? 150;
 const percent  = Math.round(((distance - emptyRef) / (0 - emptyRef)) * 100);
 
 console.log(

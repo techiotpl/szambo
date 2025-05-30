@@ -303,21 +303,33 @@ const q = `
                           ELSE empty_ts
                         END
    WHERE id = $1
-   RETURNING trigger_dist, sms_limit, phone, phone2,
-             tel_do_szambiarza, street, red_cm`;
 
-             tel_do_szambiarza, street, red_cm`;
+   RETURNING trigger_dist,
+            sms_limit,
+            phone, phone2, tel_do_szambiarza,
+            street, red_cm,
+            empty_cm                                        /* do logu */
+ `;
 
-    const r   = await db.query(
-                 q,
-                 [ d.id, distance,
-                   JSON.stringify(varsToSave) ]          //  <<< stringify
-               );
-    const row = r.rows[0];
-    console.log(
-      `Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`
-    );
+   const r = await db.query(
+     q,
+     [ d.id,
+       distance,
+       JSON.stringify(varsToSave) ]
+   );
 
+   const row = r.rows[0];
+
+   /* procent dla logów (na podstawie zaktualizowanego empty_cm) */
+   const emptyRef = row.empty_cm ?? 150;                     // default
+   const percent  = Math.round(
+     ((distance - emptyRef) / (0 - emptyRef)) * 100
+   );
+
+   console.log(
+     `Saved uplink ${devEui}: ${distance} cm ` +
+     `(≈${percent}% poziomu), flag=${row.trigger_dist}`
+   );
 
 
     /* 5. SMS przy przejściu FALSE → TRUE --------------------------------- */

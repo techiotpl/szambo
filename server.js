@@ -313,7 +313,7 @@ const q = `
                  [ d.id, distance,
                    JSON.stringify(varsToSave) ]          //  <<< stringify
                );
-    const row = r.rows[0];                              //  <<<  **DODANE**
+    const row = r.rows[0];
     console.log(
       `Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`
     );

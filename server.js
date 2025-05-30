@@ -279,43 +279,35 @@ app.post('/uplink', async (req, res) => {
     const voltage  = obj.voltage  ?? null;   // V
     if (distance === null) return res.send('noop (no distance)');
 
-/* 4. scal z JSONB + cała logika triggera / empty_* */
+/* 4. scal z JSONB + logika trigger_dist / empty_* */
 const q = `
   UPDATE devices
      SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
          distance_cm  = $2::int,
-
-         /* ── flaga alarmowa ── */
-         trigger_dist =
-           CASE
-             WHEN $2::int <= red_cm                       THEN TRUE
-             WHEN $2::int >= coalesce(empty_cm,150)       THEN FALSE
-             ELSE trigger_dist
-           END,
-
-         /* ── punkt opróżnienia ──
-            tylko gdy PRZED update'em trigger_dist był TRUE         */
-         empty_cm =
-           CASE
-             WHEN trigger_dist          /* stara wartość! */
-              AND $2::int >= coalesce(empty_cm,150)
-               THEN $2::int
-             ELSE empty_cm
-           END,
-         empty_ts =
-           CASE
-             WHEN trigger_dist
-              AND $2::int >= coalesce(empty_cm,150)
-               THEN now()
-             ELSE empty_ts
-           END
+         trigger_dist = CASE
+                          WHEN $2::int <= red_cm                 THEN TRUE
+                          WHEN $2::int >= coalesce(empty_cm,150) THEN FALSE
+                          ELSE trigger_dist
+                        END,
+         empty_cm     = CASE
+                          WHEN trigger_dist AND $2::int >= coalesce(empty_cm,150)
+                            THEN $2::int
+                          ELSE empty_cm
+                        END,
+         empty_ts     = CASE
+                          WHEN trigger_dist AND $2::int >= coalesce(empty_cm,150)
+                            THEN now()
+                          ELSE empty_ts
+                        END
    WHERE id = $1
    RETURNING trigger_dist, sms_limit, phone, phone2,
              tel_do_szambiarza, street, red_cm`;
 
-    const r = await db.query(q, [d.id, distance, varsToSave]);
-    const row = r.rows[0];
-    console.log(`Saved uplink ${devEui}: ${distance} cm, flag=${row.trigger_dist}`);
+const varsToSave = { distance, voltage };                    //  <-- NOWE
+
+const r = await db.query(q, [ d.id, distance,
+                              JSON.stringify(varsToSave) ]); //  <-- POPRAWKA
+
 
     /* 5. SMS przy przejściu FALSE → TRUE --------------------------------- */
     if (!d.trigger_dist && row.trigger_dist && row.sms_limit > 0) {

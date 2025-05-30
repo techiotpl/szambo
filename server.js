@@ -279,8 +279,7 @@ app.post('/uplink', async (req, res) => {
     const voltage  = obj.voltage  ?? null;   // V
     if (distance === null) return res.send('noop (no distance)');
 
-    /* 3a. co dokładnie zapisujemy w kolumnie JSONB --------------------- */
-   const varsToSave = { distance, voltage };   //  <<<  **DODANE**
+
 
 /* ─── 3a. co dokładnie zapisujemy w JSONB ───────────────────────── */
 const varsToSave = { distance, voltage };

@@ -563,7 +563,7 @@ app.post('/device/:serial/notify-stale', auth, async (req, res) => {
     const nowMs = Date.now();
     const hoursDiff = (nowMs - lastDate) / (1000 * 60 * 60);
 
-    if (hoursDiff <= 72) {
+    if (hoursDiff <= 1) {
       console.log(`ℹ️ [notify-stale] Ostatni pomiar sprzed ${hoursDiff.toFixed(1)}h – nie wysyłam alertu`);
       return res.status(200).send('Measurement is recent (<=72h)');
     }

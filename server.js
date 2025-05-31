@@ -219,6 +219,73 @@ app.post('/login', async (req,res) => {
   res.json({ token });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /forgot-password – generuje nowe hasło, zapisuje je w bazie i wysyła e-mail
+// ─────────────────────────────────────────────────────────────────────────────
+const crypto = require('crypto'); // do losowania nowego hasła
+
+app.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).send('Email is required');
+    }
+
+    // 1) Sprawdź, czy użytkownik o podanym e-mailu istnieje
+    const { rows } = await db.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email.toLowerCase()]
+    );
+    if (!rows.length) {
+      // Nie ujawniamy, czy konto istnieje – zawsze zwracamy 200
+      return res
+        .status(200)
+        .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
+    }
+
+    // 2) Wygeneruj losowe, tymczasowe hasło (np. 8-znakowe alfanumeryczne)
+    const newPassword = crypto.randomBytes(4).toString('hex'); 
+    // crypto.randomBytes(4) daje 4 bajty → 8 znaków w hex (0–9, a–f)
+
+    // 3) Zahaszuj je za pomocą bcrypt
+    const newHash = await bcrypt.hash(newPassword, 10);
+
+    // 4) Zapisz nowe zahashowane hasło w bazie
+    await db.query(
+      'UPDATE users SET password_hash = $1 WHERE email = $2',
+      [newHash, email.toLowerCase()]
+    );
+
+    // 5) Wyślij e-mail z nowym hasłem do użytkownika
+    const htmlContent = `
+      <p>Cześć,</p>
+      <p>Na Twoją prośbę wygenerowaliśmy nowe hasło do konta TechioT.</p>
+      <p><strong>Twoje nowe hasło:</strong> <code>${newPassword}</code></p>
+      <p>Po zalogowaniu możesz je zmienić w ustawieniach profilu.</p>
+      <br>
+      <p>Pozdrawiamy,<br>TechioT</p>
+    `;
+    await sendEmail(
+      email.toLowerCase(),
+      'Twoje nowe hasło – TechioT',
+      htmlContent
+    );
+
+    // 6) Zwróć zawsze 200 – nie mówimy, czy e-mail istniał
+    return res
+      .status(200)
+      .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
+  } catch (err) {
+    console.error('Error in /forgot-password:', err);
+    return res.status(500).send('Internal server error');
+  }
+});
+
+
+
+
+
+
 app.post('/admin/create-user', auth, adminOnly, async (req,res) => {
   const { email, password, role='client', name='', company='' } = req.body;
   const hash = await bcrypt.hash(password, 10);

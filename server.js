@@ -1,6 +1,6 @@
 // iot_backend_nodejs/
 // ─────────────────────────────────────────────────────────────────────────────
-// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + logi debugujące)
+// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + alert_email + logi debugujące)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const express    = require('express');
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS devices (
   phone2 TEXT,
   tel_do_szambiarza TEXT,
   street TEXT,
+  alert_email TEXT,
   sms_limit INT  DEFAULT 30,
   email_limit INT DEFAULT 30,
   red_cm INT    DEFAULT 30,
@@ -230,16 +231,17 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
 });
 
 
-/* ------------------------------------------------------------------
- *  GET /device/:serial/params
- *  Zwraca pola konfiguracyjne widoczne w „Ustawieniach”.
- * ----------------------------------------------------------------- */
+// ------------------------------------------------------------------
+// GET /device/:serial/params
+// Zwraca pola konfiguracyjne widoczne w „Ustawieniach” (w tym alert_email).
+// ------------------------------------------------------------------
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
     SELECT phone, phone2, tel_do_szambiarza,
            red_cm, sms_limit, email_limit,
-           empty_cm, empty_ts, abonament_expiry
+           empty_cm, empty_ts, abonament_expiry,
+           alert_email
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -252,7 +254,7 @@ app.get('/device/:serial/params', auth, async (req, res) => {
 
 
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
-  // body = { phone:'...', red_cm:42, ... }  ← dowolny podzbiór
+  // body = { phone:'...', red_cm:42, alert_email:'...', ... }
   const updates = [];
   const vals    = [];
   let i = 1;
@@ -264,7 +266,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   const sql = `UPDATE devices SET ${updates.join(',')} WHERE serial_number=$${i}`;
   console.log(`🔄 [PATCH /admin/device/${req.params.serial}/params] SQL: ${sql}, VALUES: ${JSON.stringify(vals)}`);
   await db.query(sql, vals);
-  console.log(`✅ [PATCH /admin/device/${req.params.serial}/params] Updated`);
+  console.log(`✅ [PATCH /admin/device/${req.params.serial}/params] Updated fields: ${JSON.stringify(req.body)}`);
   res.send('updated');
 });
 
@@ -486,7 +488,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
 });
 
 
-// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params) ──────────────────
+// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params + alert_email) ──────────────────
 app.post('/uplink', async (req, res) => {
   try {
     /* 1) devEUI ---------------------------------------------------------- */
@@ -501,7 +503,7 @@ app.post('/uplink', async (req, res) => {
     /* 2) urządzenie w bazie --------------------------------------------- */
     const dev = await db.query(
       `SELECT id, phone, phone2, tel_do_szambiarza, street,
-              red_cm, trigger_dist AS old_flag, sms_limit
+              red_cm, trigger_dist AS old_flag, sms_limit, alert_email
          FROM devices
         WHERE serial_number = $1`,
       [devEui]
@@ -540,7 +542,7 @@ app.post('/uplink', async (req, res) => {
                             END
        WHERE id = $1
        RETURNING trigger_dist AS new_flag, red_cm, sms_limit,
-                 phone, phone2, tel_do_szambiarza, street`;
+                 phone, phone2, tel_do_szambiarza, street, alert_email`;
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
@@ -559,7 +561,7 @@ app.post('/uplink', async (req, res) => {
       `🚀 Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
     );
 
-    /* 5) SMS alarmowe ---------------------------------------------------- */
+    /* 5) SMS alarmowe + emailalarmowe ------------------------------------ */
     if (!d.old_flag && row.new_flag && row.sms_limit > 0) {
       console.log(`📲 [POST /uplink] Wysyłam alarm SMS dla ${devEui}`);
       const norm = p => p && p.length >= 9
@@ -572,7 +574,7 @@ app.post('/uplink', async (req, res) => {
         console.log(`📱 [POST /uplink] Wysyłam SMS do użytkownika: ${phones}`);
         await sendSMS(
           phones,
-          `Poziom ${distance} cm przekroczyl próg ${row.red_cm} cm`
+          `Poziom ${distance} cm przekroczył próg ${row.red_cm} cm`
         );
         row.sms_limit -= phones.length;
       }
@@ -593,6 +595,23 @@ app.post('/uplink', async (req, res) => {
         [ row.sms_limit, d.id ]
       );
       console.log(`📉 [POST /uplink] Zaktualizowano sms_limit dla ${devEui} → ${row.sms_limit}`);
+
+      /* 5d) e-mail alert (jeśli alert_email jest ustawione) ------------ */
+      const alertEmail = row.alert_email;
+      if (alertEmail) {
+        console.log(`📧 [POST /uplink] Wysyłam powiadomienie e-mail na: ${alertEmail}`);
+        const htmlContent = `
+          <p>Uwaga!</p>
+          <p>Poziom ${distance} cm przekroczył próg ${row.red_cm} cm.</p>
+          <p>Ulica: ${row.street || '(brak adresu)'}</p>
+        `;
+        await sendEmail(
+          alertEmail.toLowerCase(),
+          `Alarm zbiornika: poziom ${distance} cm`,
+          htmlContent
+        );
+        console.log(`✅ [POST /uplink] Wysłano powiadomienie e-mail do ${alertEmail}`);
+      }
     }
 
     return res.send('OK');
@@ -638,7 +657,7 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.patch('/device/:serial/params', async (req, res) => {
   const { serial } = req.params;
-  const body = req.body; // { phone: "...", red_cm: 40, ... }
+  const body = req.body; // { phone: "...", red_cm: 40, alert_email: "foo@bar", ... }
 
   const cols = [];
   const vals = [];

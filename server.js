@@ -209,7 +209,7 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   const q = `
     SELECT phone, phone2, tel_do_szambiarza,
            red_cm, sms_limit, email_limit,
-           empty_cm, empty_ts, abonament_expiry
+           empty_cm, empty_ts, abonament_expiry,alert_email
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -440,7 +440,7 @@ app.post('/uplink', async (req, res) => {
     /* 2) urządzenie w bazie --------------------------------------------- */
     const dev = await db.query(
       `SELECT id, phone, phone2, tel_do_szambiarza, street,
-              red_cm, trigger_dist AS old_flag, sms_limit
+              red_cm, trigger_dist AS old_flag, sms_limit,alet_email
          FROM devices
         WHERE serial_number = $1`,
       [devEui]
@@ -479,7 +479,7 @@ app.post('/uplink', async (req, res) => {
                             END
        WHERE id = $1
        RETURNING trigger_dist AS new_flag, red_cm, sms_limit,
-                 phone, phone2, tel_do_szambiarza, street`;
+                 phone, phone2, tel_do_szambiarza, street,alert_email`;
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
@@ -522,14 +522,34 @@ app.post('/uplink', async (req, res) => {
         );
         row.sms_limit -= 1;
       }
-      /* 5c) aktualizacja limitu ---------------------------------------- */
-      await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
-      console.log(`📉 [POST /uplink] Zaktualizowano sms_limit dla ${devEui} → ${row.sms_limit}`);
+    /* 5c) aktualizacja limitu SMS ------------------------------------ */
+      await db.query(
+        'UPDATE devices SET sms_limit = $1 WHERE id = $2',
+        [row.sms_limit, d.id]
+        console.log(`📉 [POST /uplink] Zaktualizowano sms_limit dla ${devEui} → ${row.sms_limit}`);
+      );
+    }
+
+    /* 6) E-mail alarmowy (nowa sekcja) ------------------------------------- */
+    if (row.alert_email) {
+      try {
+        // Wywołujemy nasz helper do wysyłki maili przez SMTP
+        await sendEmail(
+          row.alert_email,
+          '🚨 Alarm: poziom w szambie',
+          `<p>Poziom ${distance} cm przekroczył próg ${row.red_cm} cm.</p>
+           ${row.street ? `<p>Adres: ${row.street}</p>` : ''}
+           <p>TechioT</p>`
+        );
+        console.log(`Sent alert e-mail to ${row.alert_email}`);
+      } catch (e) {
+        console.error('❌ Błąd podczas wysyłki e-mail alert:', e);
+      }
     }
 
     return res.send('OK');
   } catch (err) {
-    console.error('❌ Error in /uplink:', err);
+    console.error('Error in /uplink:', err);
     return res.status(500).send('uplink error');
   }
 });

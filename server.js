@@ -1,4 +1,4 @@
-// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + logi debugujące + notify-stale)
+// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + logi debugujące)
 
 const express    = require('express');
 const bodyParser = require('body-parser');
@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS devices (
   tel_do_szambiarza TEXT,
   street TEXT,
   sms_limit INT  DEFAULT 30,
-  email_limit INT DEFAULT 30,
   red_cm INT    DEFAULT 30,
   empty_cm INT  DEFAULT 150,
   empty_ts TIMESTAMPTZ,
@@ -202,12 +201,12 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   res.json(rows);
 });
 
-// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
+// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”.
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
     SELECT phone, phone2, tel_do_szambiarza, alert_email,
-           red_cm, sms_limit, email_limit,
+           red_cm, sms_limit,
            empty_cm, empty_ts, abonament_expiry
       FROM devices
      WHERE serial_number = $1`;
@@ -501,123 +500,40 @@ app.post('/uplink', async (req, res) => {
 
       /* 5a) użytkownik ------------------------------------------------- */
       if (phones.length && row.sms_limit >= phones.length) {
-        await sendSMS(
-          phones,
-          `Poziom ${distance} cm przekroczyl próg ${row.red_cm} cm`
-        );
+        for (const num of phones) {
+          try {
+            await sendSMS(num, `Poziom ${distance} cm przekroczyl próg ${row.red_cm} cm`);
+          } catch (smsErr) {
+            console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
+          }
+        }
         row.sms_limit -= phones.length;
       }
+
       /* 5b) szambiarz --------------------------------------------------- */
       if (szambTel && row.sms_limit > 0) {
-        await sendSMS(
-          [szambTel],
-          `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${phones[0] || 'brak'}`
-        );
+        try {
+          await sendSMS(szambTel,
+            `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${phones[0] || 'brak'}`);
+        } catch (smsErr) {
+          console.error(`❌ Błąd przy wysyłaniu SMS do ${szambTel}:`, smsErr);
+        }
         row.sms_limit -= 1;
       }
+
       /* 5c) aktualizacja limitu ---------------------------------------- */
       await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
       console.log(`📉 [POST /uplink] Zaktualizowano sms_limit dla ${devEui} → ${row.sms_limit}`);
+    } else {
+      if (row.sms_limit <= 0) {
+        console.log(`⚠️ [POST /uplink] sms_limit=0, pomijam wysyłkę SMS`);
+      }
     }
 
     return res.send('OK');
   } catch (err) {
     console.error('❌ Error in /uplink:', err);
     return res.status(500).send('uplink error');
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// *** NOWY ENDPOINT: POST /device/:serial/notify-stale ***
-// Jeśli od ostatniego pomiaru upłynęło > 72h, wyślij SMS + e-mail do alert_email
-app.post('/device/:serial/notify-stale', auth, async (req, res) => {
-  const { serial } = req.params;
-  try {
-    console.log(`🔍 [POST /device/${serial}/notify-stale] Sprawdzam stary pomiar`);
-
-    // 1) Pobierz timestamp "ts" z JSONB params oraz telefony i alert_email
-    const q = `
-      SELECT
-        (params ->> 'ts')      AS last_ts,
-        phone,
-        phone2,
-        alert_email
-      FROM devices
-      WHERE serial_number = $1
-      LIMIT 1
-    `;
-    const { rows } = await db.query(q, [serial]);
-    if (!rows.length) {
-      console.log(`⚠️ [notify-stale] Nie znaleziono urządzenia: ${serial}`);
-      return res.status(404).send('Device not found');
-    }
-
-    const row = rows[0];
-    if (!row.last_ts) {
-      console.log(`⚠️ [notify-stale] Brak ts w params dla ${serial}`);
-      return res.status(400).send('No measurement timestamp');
-    }
-
-    // 2) Oblicz różnicę w godzinach
-    const lastDate = new Date(row.last_ts).getTime();
-    const nowMs = Date.now();
-    const hoursDiff = (nowMs - lastDate) / (1000 * 60 * 60);
-
-    if (hoursDiff <= 1) {
-      console.log(`ℹ️ [notify-stale] Ostatni pomiar sprzed ${hoursDiff.toFixed(1)}h – nie wysyłam alertu`);
-      return res.status(200).send('Measurement is recent (<=72h)');
-    }
-
-    // 3) Wyślij powiadomienia:
-    //    a) SMS na phone i phone2 (jeśli istnieją)
-    const toNumbers = [];
-    if (row.phone) {
-      const p = normalisePhone(row.phone);
-      if (p) toNumbers.push(p);
-    }
-    if (row.phone2) {
-      const p2 = normalisePhone(row.phone2);
-      if (p2) toNumbers.push(p2);
-    }
-    if (toNumbers.length) {
-      const msg = `⚠️ Brak pomiaru z urządzenia ${serial} od ponad 72h!`;
-      console.log(`📲 [notify-stale] Wysyłam SMS na: ${toNumbers.join(', ')}`);
-      for (const num of toNumbers) {
-        try {
-          await sendSMS(num, msg);
-        } catch (smsErr) {
-          console.error(`❌ Błąd przy Wysyłaniu SMS do ${num}:`, smsErr);
-        }
-      }
-    } else {
-      console.log(`⚠️ [notify-stale] Brak numerów telefonu do powiadomienia`);
-    }
-
-    //    b) E-mail na alert_email (jeśli ustawione)
-    if (row.alert_email) {
-      const mailTo = row.alert_email;
-      const subj = `⚠️ Czujnik ${serial} nie odpowiada (72h)`;
-      const htmlBody = `
-        <p>Cześć,</p>
-        <p>Upłynęło ponad 72 godziny od ostatniego pomiaru z urządzenia <strong>${serial}</strong>.</p>
-        <p>Prosimy o sprawdzenie działania czujnika.</p>
-        <br>
-        <p>Pozdrawiamy,<br>TechioT</p>
-      `;
-      console.log(`✉️ [notify-stale] Wysyłam e-mail do: ${mailTo}`);
-      try {
-        await sendEmail(mailTo, subj, htmlBody);
-      } catch (emailErr) {
-        console.error(`❌ Błąd przy wysyłaniu e-maila do ${mailTo}:`, emailErr);
-      }
-    } else {
-      console.log(`⚠️ [notify-stale] alert_email nie jest ustawione`);
-    }
-
-    return res.status(200).send('Alerts sent (if numbers/emails exist)');
-  } catch (err) {
-    console.error(`❌ Error in /device/${serial}/notify-stale:`, err);
-    return res.status(500).send('notify-stale error');
   }
 });
 
@@ -640,8 +556,7 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
       END                               AS procent
     FROM devices
     WHERE serial_number = $1
-    LIMIT 1
-  `;
+    LIMIT 1`;
   const { rows } = await db.query(q, [serial_number]);
   if (!rows.length) {
     console.log(`⚠️ [GET /device/${serial_number}/vars] Nie znaleziono urządzenia`);

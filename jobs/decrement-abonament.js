@@ -1,33 +1,40 @@
-// jobs/decrement-abonament.js
+/**
+ * jobs/decrement-abonament.js
+ *
+ * Ten skrypt:
+ *  - Łączy się z bazą Postgres przez Pool (zmienna środowiskowa DATABASE_URL)
+ *  - Ustawia sms_limit = 0 dla rekordów, których abonament_expiry <= CURRENT_DATE
+ *  - Wypisuje w konsoli, ile wierszy zostało zaktualizowanych
+ */
 
 const { Pool } = require('pg');
 require('dotenv').config();
 
 (async () => {
-  // Używamy wyłącznie DATABASE_URL z environment:
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  // 1) Inicjalizacja połączenia do bazy
+  const db = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    // Jeżeli korzystasz z SSL, odkomentuj poniższe (jeśli potrzebujesz):
+    // ssl: { rejectUnauthorized: false }
+  });
 
   try {
-    // Załóżmy, że abonament_expiry to data wygaśnięcia (DATE),
-    // a wiesz, że chcesz codziennie dekrementować jakiś licznik.
-    // Dla uproszczenia: odejmij 1 od kolumny sms_limit, gdy abonament_expiry < today.
-    const client = await pool.connect();
-
-    // Przykład: dla każdego device, u którego abonament_expiry < dziś, resetuj sms_limit = 0
-    const now = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const updateQuery = `
+    // 2) Wykonaj UPDATE, zwracając id zaktualizowanych wierszy
+    const result = await db.query(
+      `
       UPDATE devices
          SET sms_limit = 0
-       WHERE abonament_expiry IS NOT NULL
-         AND abonament_expiry < $1
-    `;
-    const { rowCount } = await client.query(updateQuery, [now]);
-    console.log(`✅ Abonamenty przetworzone, zresetowano sms_limit dla ${rowCount} urządzeń.`);
+       WHERE abonament_expiry <= CURRENT_DATE
+       RETURNING id
+      `
+    );
 
-    client.release();
-    process.exit(0);
+    const count = result.rows.length;
+    console.log(`✅ Abonamenty przetworzone, zresetowano sms_limit dla ${count} urządzeń.`);
   } catch (err) {
-    console.error('❌ Błąd podczas dekremantacji abonamentów:', err);
-    process.exit(1);
+    console.error('❌ Błąd podczas dekrementacji/resetu abonamentów:', err);
+  } finally {
+    // 3) Zamknij połączenie do bazy
+    await db.end();
   }
 })();

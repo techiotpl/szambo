@@ -1,4 +1,9 @@
-// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + logi debugujące)
+// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + debug + próg z e-mailem)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Uwaga: usunęliśmy tutaj całą logikę „notify-stale (72h)”.
+// Skupiamy się wyłącznie na /uplink + wysyłce SMS + e-mail przy przekroczeniu progu.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const express    = require('express');
 const bodyParser = require('body-parser');
@@ -55,7 +60,7 @@ CREATE TABLE IF NOT EXISTS devices (
   trigger_dist BOOLEAN DEFAULT false,
   params JSONB  DEFAULT '{}',
   abonament_expiry DATE,
-  alert_email TEXT,            -- dodaliśmy kolumnę alert_email
+  alert_email TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 `;
@@ -123,7 +128,7 @@ async function sendEmail(to, subj, html) {
     html: html
   };
 
-  console.log(`✉️ Próbuję wysłać maila do: ${recipients} (temat: "${subj}")`);
+  console.log(`✉️ Próbuję wysłać e-maila do: ${recipients} (temat: "${subj}")`);
   const info = await transporter.sendMail(mailOptions);
   console.log('✅ Wysłano e-mail przez SMTP:', info.messageId);
 }
@@ -226,6 +231,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   }
   vals.push(req.params.serial);
   await db.query(`UPDATE devices SET ${updates.join(',')} WHERE serial_number=$${i}`, vals);
+  console.log(`✅ [PATCH /admin/device/${req.params.serial}/params] Zaktualizowano: ${JSON.stringify(req.body)}`);
   res.send('updated');
 });
 
@@ -417,7 +423,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
   }
 });
 
-// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params) ──────────────────
+// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params + email alert) ────
 app.post('/uplink', async (req, res) => {
   try {
     /* 1) devEUI ---------------------------------------------------------- */
@@ -431,17 +437,25 @@ app.post('/uplink', async (req, res) => {
 
     /* 2) urządzenie w bazie --------------------------------------------- */
     const dev = await db.query(
-      `SELECT id, phone, phone2, tel_do_szambiarza, street,
-              red_cm, trigger_dist AS old_flag, sms_limit
-         FROM devices
-        WHERE serial_number = $1`,
+      `SELECT 
+         id, 
+         phone, 
+         phone2, 
+         tel_do_szambiarza, 
+         street,
+         red_cm, 
+         trigger_dist AS old_flag, 
+         sms_limit,
+         alert_email
+       FROM devices
+      WHERE serial_number = $1`,
       [devEui]
     );
     if (!dev.rowCount) {
       console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
       return res.status(404).send('Unknown device');
     }
-    const d = dev.rows[0];  // stara flaga → d.old_flag
+    const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email
 
     /* 3) payload --------------------------------------------------------- */
     const obj      = req.body.object || {};
@@ -459,7 +473,7 @@ app.post('/uplink', async (req, res) => {
       ts: new Date().toISOString()
     };
 
-    /* 4) zapis + nowa flaga ---------------------------------------------- */
+    /* 4) zapis + obliczenie nowej flagi ---------------------------------- */
     const q = `
       UPDATE devices
          SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
@@ -470,8 +484,15 @@ app.post('/uplink', async (req, res) => {
                               ELSE trigger_dist
                             END
        WHERE id = $1
-       RETURNING trigger_dist AS new_flag, red_cm, sms_limit,
-                 phone, phone2, tel_do_szambiarza, street`;
+       RETURNING 
+         trigger_dist AS new_flag, 
+         red_cm, 
+         sms_limit,
+         phone, 
+         phone2, 
+         tel_do_szambiarza, 
+         street,
+         alert_email`;
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
@@ -483,50 +504,83 @@ app.post('/uplink', async (req, res) => {
       );
     }
 
-    /* 4b) wygodne logowanie --------------------------------------------- */
+    /* 4b) logowanie wartości ------------------------------------------------ */
     const ref = row.red_cm;  // próg alarmu
     const pct = Math.round(((distance - ref) / -ref) * 100);
     console.log(
       `🚀 Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
     );
 
-    /* 5) SMS alarmowe ---------------------------------------------------- */
-    if (!d.old_flag && row.new_flag && row.sms_limit > 0) {
-      console.log(`📲 [POST /uplink] Wysyłam alarm SMS dla ${devEui}`);
-      const norm = p => p && p.length >= 9
-          ? (p.startsWith('+48') ? p : '+48'+p) : null;
-      const phones   = [norm(row.phone), norm(row.phone2)].filter(Boolean);
-      const szambTel = norm(row.tel_do_szambiarza);
+    /* 5) ALARM SMS + ALARM E-MAIL (po przekroczeniu progu) ---------------- */
+    if (!d.old_flag && row.new_flag) {
+      console.log(`📲 [POST /uplink] Próg przekroczony dla ${devEui} → wysyłam alerty`);
 
-      /* 5a) użytkownik ------------------------------------------------- */
-      if (phones.length && row.sms_limit >= phones.length) {
-        for (const num of phones) {
+      // 5a) SMS na phone i phone2 (jeśli istnieją i jeśli sms_limit > 0)
+      const toNumbers = [];
+      if (row.phone) {
+        const p = normalisePhone(row.phone);
+        if (p) toNumbers.push(p);
+      }
+      if (row.phone2) {
+        const p2 = normalisePhone(row.phone2);
+        if (p2) toNumbers.push(p2);
+      }
+      if (toNumbers.length && row.sms_limit > 0) {
+        const msg = `⚠️ Poziom ${distance} cm przekroczył próg ${row.red_cm} cm`;
+        console.log(`📲 [POST /uplink] Wysyłam SMS na: ${toNumbers.join(', ')}`);
+        let usedSms = 0;
+        for (const num of toNumbers) {
+          if (row.sms_limit - usedSms <= 0) break; // nie ma już limitu
           try {
-            await sendSMS(num, `Poziom ${distance} cm przekroczyl próg ${row.red_cm} cm`);
+            await sendSMS(num, msg);
+            usedSms++;
           } catch (smsErr) {
             console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
           }
         }
-        row.sms_limit -= phones.length;
+        row.sms_limit -= usedSms;
+      } else {
+        console.log(`⚠️ [POST /uplink] sms_limit=0 lub brak numerów, pomijam SMS`);
       }
 
-      /* 5b) szambiarz --------------------------------------------------- */
-      if (szambTel && row.sms_limit > 0) {
-        try {
-          await sendSMS(szambTel,
-            `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${phones[0] || 'brak'}`);
-        } catch (smsErr) {
-          console.error(`❌ Błąd przy wysyłaniu SMS do ${szambTel}:`, smsErr);
+      // 5b) SMS dla szambiarza (jeśli istnieje i jeśli sms_limit > 0)
+      if (row.tel_do_szambiarza && row.sms_limit > 0) {
+        const szam = normalisePhone(row.tel_do_szambiarza);
+        if (szam) {
+          const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${toNumbers[0] || 'brak'}`;
+          try {
+            console.log(`📲 [POST /uplink] Wysyłam SMS do szambiarza: ${szam}`);
+            await sendSMS(szam, msg2);
+            row.sms_limit--;
+          } catch (smsErr) {
+            console.error(`❌ Błąd przy wysyłaniu SMS do szambiarza (${szam}):`, smsErr);
+          }
         }
-        row.sms_limit -= 1;
       }
 
-      /* 5c) aktualizacja limitu ---------------------------------------- */
+      // 5c) Zaktualizuj pozostały sms_limit
       await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
-      console.log(`📉 [POST /uplink] Zaktualizowano sms_limit dla ${devEui} → ${row.sms_limit}`);
-    } else {
-      if (row.sms_limit <= 0) {
-        console.log(`⚠️ [POST /uplink] sms_limit=0, pomijam wysyłkę SMS`);
+      console.log(`📉 [POST /uplink] Zaktualizowano sms_limit → ${row.sms_limit}`);
+
+      // 5d) WYŚLIJ e-mail, jeśli alert_email jest ustawione
+      if (row.alert_email) {
+        const mailTo = row.alert_email;
+        const subj   = `⚠️ Poziom ${distance} cm przekroczył próg na ${devEui}`;
+        const html   = `
+          <p>Cześć,</p>
+          <p>Uwaga! Urządzenie <strong>${devEui}</strong> przekroczyło próg alarmowy ${row.red_cm} cm:</p>
+          <p><strong>Aktualny poziom:</strong> ${distance} cm</p>
+          <br>
+          <p>Pozdrawiamy,<br>TechioT</p>
+        `;
+        console.log(`✉️ [POST /uplink] Wysyłam e-mail na: ${mailTo}`);
+        try {
+          await sendEmail(mailTo, subj, html);
+        } catch (emailErr) {
+          console.error(`❌ Błąd przy wysyłaniu e-maila do ${mailTo}:`, emailErr);
+        }
+      } else {
+        console.log(`⚠️ [POST /uplink] alert_email nie jest ustawione, pomijam e-mail`);
       }
     }
 
@@ -534,100 +588,6 @@ app.post('/uplink', async (req, res) => {
   } catch (err) {
     console.error('❌ Error in /uplink:', err);
     return res.status(500).send('uplink error');
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// *** NOWY ENDPOINT: POST /device/:serial/notify-stale ***
-// Jeśli od ostatniego pomiaru upłynęło > 72h, wyślij SMS + e-mail do alert_email
-app.post('/device/:serial/notify-stale', auth, async (req, res) => {
-  const { serial } = req.params;
-  try {
-    console.log(`🔍 [POST /device/${serial}/notify-stale] Sprawdzam stary pomiar`);
-
-    // 1) Pobierz timestamp "ts" z JSONB params oraz telefony i alert_email
-    const q = `
-      SELECT
-        (params ->> 'ts')      AS last_ts,
-        phone,
-        phone2,
-        alert_email
-      FROM devices
-      WHERE serial_number = $1
-      LIMIT 1
-    `;
-    const { rows } = await db.query(q, [serial]);
-    if (!rows.length) {
-      console.log(`⚠️ [notify-stale] Nie znaleziono urządzenia: ${serial}`);
-      return res.status(404).send('Device not found');
-    }
-
-    const row = rows[0];
-    if (!row.last_ts) {
-      console.log(`⚠️ [notify-stale] Brak ts w params dla ${serial}`);
-      return res.status(400).send('No measurement timestamp');
-    }
-
-    // 2) Oblicz różnicę w godzinach
-    const lastDate = new Date(row.last_ts).getTime();
-    const nowMs = Date.now();
-    const hoursDiff = (nowMs - lastDate) / (1000 * 60 * 60);
-
-    if (hoursDiff <= 72) {
-      console.log(`ℹ️ [notify-stale] Ostatni pomiar sprzed ${hoursDiff.toFixed(1)}h – nie wysyłam alertu`);
-      return res.status(200).send('Measurement is recent (<=72h)');
-    }
-
-    // 3) Wyślij powiadomienia:
-    //    a) SMS na phone i phone2 (jeśli istnieją)
-    const toNumbers = [];
-    if (row.phone) {
-      const p = normalisePhone(row.phone);
-      if (p) toNumbers.push(p);
-    }
-    if (row.phone2) {
-      const p2 = normalisePhone(row.phone2);
-      if (p2) toNumbers.push(p2);
-    }
-    if (toNumbers.length) {
-      const msg = `⚠️ Brak pomiaru z urządzenia ${serial} od ponad 72h!`;
-      console.log(`📲 [notify-stale] Wysyłam SMS na: ${toNumbers.join(', ')}`);
-      for (const num of toNumbers) {
-        try {
-          await sendSMS(num, msg);
-        } catch (smsErr) {
-          console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
-        }
-      }
-    } else {
-      console.log(`⚠️ [notify-stale] Brak numerów telefonu do powiadomienia`);
-    }
-
-    //    b) E-mail na alert_email (jeśli ustawione)
-    if (row.alert_email) {
-      const mailTo = row.alert_email;
-      const subj = `⚠️ Czujnik ${serial} nie odpowiada (72h)`;
-      const htmlBody = `
-        <p>Cześć,</p>
-        <p>Upłynęło ponad 72 godziny od ostatniego pomiaru z urządzenia <strong>${serial}</strong>.</p>
-        <p>Prosimy o sprawdzenie działania czujnika.</p>
-        <br>
-        <p>Pozdrawiamy,<br>TechioT</p>
-      `;
-      console.log(`✉️ [notify-stale] Wysyłam e-mail do: ${mailTo}`);
-      try {
-        await sendEmail(mailTo, subj, htmlBody);
-      } catch (emailErr) {
-        console.error(`❌ Błąd przy wysyłaniu e-maila do ${mailTo}:`, emailErr);
-      }
-    } else {
-      console.log(`⚠️ [notify-stale] alert_email nie jest ustawione`);
-    }
-
-    return res.status(200).send('Alerts sent (if numbers/emails exist)');
-  } catch (err) {
-    console.error(`❌ Error in /device/${serial}/notify-stale:`, err);
-    return res.status(500).send('notify-stale error');
   }
 });
 

@@ -492,8 +492,19 @@ app.post('/uplink', async (req, res) => {
          phone2, 
          tel_do_szambiarza, 
          street,
+         stale_alert_sent,
          alert_email`;
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
+
+    // --- jeśli czujnik znowu wysłał pomiar – kasujemy znacznik „72 h alert wysłany”
+if (row.stale_alert_sent) {
+  await db.query(
+    'UPDATE devices SET stale_alert_sent = FALSE WHERE id = $1',
+    [d.id]
+  );
+  console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
+}
+
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
     if (d.old_flag && !row.new_flag) {

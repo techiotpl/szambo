@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS devices (
   trigger_dist BOOLEAN DEFAULT false,
   params JSONB  DEFAULT '{}',
   abonament_expiry DATE,
-  alert_email TEXT,            -- <── Dodaliśmy kolumnę alert_email
+  alert_email TEXT,            -- dodaliśmy kolumnę alert_email
   created_at TIMESTAMPTZ DEFAULT now()
 );
 `;
@@ -201,7 +201,7 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   res.json(rows);
 });
 
-// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”.
+// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
@@ -534,6 +534,100 @@ app.post('/uplink', async (req, res) => {
   } catch (err) {
     console.error('❌ Error in /uplink:', err);
     return res.status(500).send('uplink error');
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// *** NOWY ENDPOINT: POST /device/:serial/notify-stale ***
+// Jeśli od ostatniego pomiaru upłynęło > 72h, wyślij SMS + e-mail do alert_email
+app.post('/device/:serial/notify-stale', auth, async (req, res) => {
+  const { serial } = req.params;
+  try {
+    console.log(`🔍 [POST /device/${serial}/notify-stale] Sprawdzam stary pomiar`);
+
+    // 1) Pobierz timestamp "ts" z JSONB params oraz telefony i alert_email
+    const q = `
+      SELECT
+        (params ->> 'ts')      AS last_ts,
+        phone,
+        phone2,
+        alert_email
+      FROM devices
+      WHERE serial_number = $1
+      LIMIT 1
+    `;
+    const { rows } = await db.query(q, [serial]);
+    if (!rows.length) {
+      console.log(`⚠️ [notify-stale] Nie znaleziono urządzenia: ${serial}`);
+      return res.status(404).send('Device not found');
+    }
+
+    const row = rows[0];
+    if (!row.last_ts) {
+      console.log(`⚠️ [notify-stale] Brak ts w params dla ${serial}`);
+      return res.status(400).send('No measurement timestamp');
+    }
+
+    // 2) Oblicz różnicę w godzinach
+    const lastDate = new Date(row.last_ts).getTime();
+    const nowMs = Date.now();
+    const hoursDiff = (nowMs - lastDate) / (1000 * 60 * 60);
+
+    if (hoursDiff <= 72) {
+      console.log(`ℹ️ [notify-stale] Ostatni pomiar sprzed ${hoursDiff.toFixed(1)}h – nie wysyłam alertu`);
+      return res.status(200).send('Measurement is recent (<=72h)');
+    }
+
+    // 3) Wyślij powiadomienia:
+    //    a) SMS na phone i phone2 (jeśli istnieją)
+    const toNumbers = [];
+    if (row.phone) {
+      const p = normalisePhone(row.phone);
+      if (p) toNumbers.push(p);
+    }
+    if (row.phone2) {
+      const p2 = normalisePhone(row.phone2);
+      if (p2) toNumbers.push(p2);
+    }
+    if (toNumbers.length) {
+      const msg = `⚠️ Brak pomiaru z urządzenia ${serial} od ponad 72h!`;
+      console.log(`📲 [notify-stale] Wysyłam SMS na: ${toNumbers.join(', ')}`);
+      for (const num of toNumbers) {
+        try {
+          await sendSMS(num, msg);
+        } catch (smsErr) {
+          console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
+        }
+      }
+    } else {
+      console.log(`⚠️ [notify-stale] Brak numerów telefonu do powiadomienia`);
+    }
+
+    //    b) E-mail na alert_email (jeśli ustawione)
+    if (row.alert_email) {
+      const mailTo = row.alert_email;
+      const subj = `⚠️ Czujnik ${serial} nie odpowiada (72h)`;
+      const htmlBody = `
+        <p>Cześć,</p>
+        <p>Upłynęło ponad 72 godziny od ostatniego pomiaru z urządzenia <strong>${serial}</strong>.</p>
+        <p>Prosimy o sprawdzenie działania czujnika.</p>
+        <br>
+        <p>Pozdrawiamy,<br>TechioT</p>
+      `;
+      console.log(`✉️ [notify-stale] Wysyłam e-mail do: ${mailTo}`);
+      try {
+        await sendEmail(mailTo, subj, htmlBody);
+      } catch (emailErr) {
+        console.error(`❌ Błąd przy wysyłaniu e-maila do ${mailTo}:`, emailErr);
+      }
+    } else {
+      console.log(`⚠️ [notify-stale] alert_email nie jest ustawione`);
+    }
+
+    return res.status(200).send('Alerts sent (if numbers/emails exist)');
+  } catch (err) {
+    console.error(`❌ Error in /device/${serial}/notify-stale:`, err);
+    return res.status(500).send('notify-stale error');
   }
 });
 

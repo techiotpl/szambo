@@ -238,22 +238,61 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
 // 3) POST /login — logowanie
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
+
+  // ▪ Podstawowa walidacja inputu:
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    console.log(`❌ [POST /login] Niepoprawny email: ${email}`);
+    return res.status(400).send('Niepoprawny email');
+  }
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    console.log(`❌ [POST /login] Za krótkie hasło dla: ${email}`);
+    return res.status(400).send('Hasło musi mieć minimum 6 znaków');
+  }
+
   console.log(`🔑 [POST /login] próba logowania użytkownika: ${email}`);
-  const { rows } = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]);
+  let rows;
+  try {
+    ({ rows } = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]));
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd bazy przy pobieraniu usera:`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
   const u = rows[0];
   if (!u) {
     console.log(`❌ [POST /login] Brak usera: ${email}`);
-    return res.status(401).send('Bad creds');
+    return res.status(401).send('Niepoprawne dane logowania');
   }
-  const passwordMatches = await bcrypt.compare(password, u.password_hash);
+
+  let passwordMatches;
+  try {
+    passwordMatches = await bcrypt.compare(password, u.password_hash);
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd bcrypt dla: ${email}`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
   if (!passwordMatches) {
     console.log(`❌ [POST /login] Złe hasło dla usera: ${email}`);
-    return res.status(401).send('Bad creds');
+    return res.status(401).send('Niepoprawne dane logowania');
   }
-  const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET);
+
+  let token;
+  try {
+    // ▪ Bez parametru expiresIn → token ważny do zmiany JWT_SECRET
+    token = jwt.sign(
+      { id: u.id, email: u.email, role: u.role },
+      JWT_SECRET
+    );
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd przy generowaniu tokenu dla: ${email}`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
   console.log(`✅ [POST /login] Poprawne logowanie: ${email}`);
-  res.json({ token });
+  return res.json({ token });
 });
+
 
 // 4) POST /forgot-password – generuje nowe hasło, zapisuje w bazie i wysyła e-mail
 app.post('/forgot-password', async (req, res) => {

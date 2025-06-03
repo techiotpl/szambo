@@ -659,30 +659,67 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PATCH /device/:serial/params – zapis nowych parametrów
+// PATCH /device/:serial/params – zapis nowych parametrów (walidacja kluczy)
 // ─────────────────────────────────────────────────────────────────────────────
-app.patch('/device/:serial/params', async (req, res) => {
+app.patch('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
-  const body = req.body; // { phone: "...", red_cm: 40, alert_email: "...", ... }
+  const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
+
+  // ▪ Ustal listę dozwolonych pól
+  const allowedFields = new Set([
+    'phone',
+    'phone2',
+    'tel_do_szambiarza',
+    'alert_email',
+    'red_cm',
+    'serial_number',
+    'street',
+    'trigger_distance',
+    'sms_limit'
+    // Dodaj tu kolejne, jeśli rozszerzysz model (np. 'empty_cm' itd.)
+  ]);
 
   const cols = [];
   const vals = [];
   let i = 1;
+
   for (const [k, v] of Object.entries(body)) {
+    if (!allowedFields.has(k)) {
+      console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
+      return res.status(400).send(`Niedozwolone pole: ${k}`);
+    }
+    // Dodatkowa walidacja np. dla 'phone' – poniżej przykład minimalny:
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    }
+    if (k === 'red_cm' || k === 'sms_limit') {
+      const num = Number(v);
+      if (Number.isNaN(num) || num < 0) {
+        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+      }
+    }
+
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
+
   if (!cols.length) {
-    console.log(`❌ [PATCH /device/${serial}/params] Brak danych do aktualizacji`);
-    return res.sendStatus(400);
+    console.log(`❌ [PATCH /device/${serial}/params] Brak danych do zaktualizowania`);
+    return res.status(400).send('Brak danych do aktualizacji');
   }
 
   vals.push(serial); // ostatni parametr do WHERE
   const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
-  await db.query(q, vals);
-  console.log(`✅ [PATCH /device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
-  res.sendStatus(200);
+  try {
+    await db.query(q, vals);
+    console.log(`✅ [PATCH /device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error(`❌ [PATCH /device/${serial}/params] Błąd bazy:`, err);
+    return res.status(500).send('Błąd serwera');
+  }
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

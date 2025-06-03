@@ -1,12 +1,8 @@
 // server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + debug + próg z e-mailem)
 
 // ─────────────────────────────────────────────────────────────────────────────
-<<<<<<< HEAD
-// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid)
-=======
 // Uwaga: usunęliśmy tutaj całą logikę „notify-stale (72h)”.
 // Skupiamy się wyłącznie na /uplink + wysyłce SMS + e-mail przy przekroczeniu progu.
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 // ─────────────────────────────────────────────────────────────────────────────
 
 const express    = require('express');
@@ -64,10 +60,7 @@ CREATE TABLE IF NOT EXISTS devices (
   trigger_dist BOOLEAN DEFAULT false,
   params JSONB  DEFAULT '{}',
   abonament_expiry DATE,
-<<<<<<< HEAD
-=======
   alert_email TEXT,
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   created_at TIMESTAMPTZ DEFAULT now()
 );
 `;
@@ -141,56 +134,6 @@ async function sendEmail(to, subj, html) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMTP KONFIGURACJA (nodemailer)
-// ─────────────────────────────────────────────────────────────────────────────
-const smtpHost   = process.env.SMTP_HOST;
-const smtpPort   = parseInt(process.env.SMTP_PORT || '465', 10);
-const smtpSecure = (process.env.SMTP_SECURE === 'true');
-const smtpUser   = process.env.SMTP_USER;
-const smtpPass   = process.env.SMTP_PASS;
-const smtpFrom   = process.env.SMTP_FROM;   // np. 'noreply@techiot.pl'
-
-if (!smtpHost || !smtpPort || !smtpUser || !smtpPass || !smtpFrom) {
-  console.warn('Brakuje zmiennych SMTP_* w środowisku. E-mail nie będzie działać.');
-}
-
-const transporter = nodemailer.createTransport({
-  host: smtpHost,
-  port: smtpPort,
-  secure: smtpSecure, // true jeśli port 465
-  auth: {
-    user: smtpUser,
-    pass: smtpPass
-  },
-  tls: {
-    rejectUnauthorized: false
-  }
-});
-
-/**
- * Wysyła e-mail przez SMTP (nodemailer).
- * - `to` może być stringiem (pojedynczy email) lub tablicą stringów.
- * - `subj` to temat wiadomości (string).
- * - `html` to zawartość wiadomości w formacie HTML (string).
- */
-async function sendEmail(to, subj, html) {
-  if (!transporter) {
-    throw new Error('SMTP transporter nie jest skonfigurowany');
-  }
-
-  const recipients = Array.isArray(to) ? to.join(', ') : to;
-  const mailOptions = {
-    from: smtpFrom,
-    to: recipients,
-    subject: subj,
-    html: html
-  };
-
-  const info = await transporter.sendMail(mailOptions);
-  console.log('Wysłano e-mail przez SMTP:', info.messageId);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 function removePolishLetters(str = "") {
@@ -214,18 +157,11 @@ async function sendSMS(phone, msg) {
   if (r.status !== 200) throw new Error('SMSplanet HTTP ' + r.status);
 }
 
-<<<<<<< HEAD
-async function updateHelium(serie,name,street){
-  const token=(process.env.HELIUMBEARER||'').trim(); if(!token) return;
-  await axios.put(`https://console.helium-iot.xyz/api/devices/${serie}`,{
-    device:{
-=======
 async function updateHelium(serie, name, street) {
   const token = (process.env.HELIUMBEARER || '').trim();
   if (!token) return;
   await axios.put(`https://console.helium-iot.xyz/api/devices/${serie}`, {
     device: {
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       applicationId: "b1b1bc39-ce10-49f3-88de-3999b1da5cf4",
       deviceProfileId: "8a862a36-3aba-4c14-9a47-a41a5e33684e",
       name,
@@ -233,42 +169,24 @@ async function updateHelium(serie, name, street) {
       tags:{},
       variables:{}
     }
-<<<<<<< HEAD
-  },{headers:{Accept:'application/json',Authorization:`Bearer ${token}`}});
-=======
   }, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH MIDDLEWARE
 // ─────────────────────────────────────────────────────────────────────────────
-<<<<<<< HEAD
-function auth(req,res,next){
-  const token=req.headers.authorization?.split(' ')[1];
-  if(!token) return res.status(401).send('Missing token');
-  try { 
-    req.user = jwt.verify(token, JWT_SECRET);
-    return next(); 
-=======
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).send('Missing token');
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     return next();
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   } catch {
     return res.status(401).send('Invalid token');
   }
 }
-<<<<<<< HEAD
-function adminOnly(req,res,next){ 
-  if(req.user.role !== 'admin') return res.status(403).send('Forbidden');
-=======
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).send('Forbidden');
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   next();
 }
 
@@ -276,12 +194,8 @@ function adminOnly(req, res, next) {
 // ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-app.get('/admin/users-with-devices', auth, adminOnly, async (req,res) => {
-=======
 // 1) GET /admin/users-with-devices (auth + adminOnly)
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const q = `
     SELECT u.id, u.email, u.name,
            json_agg(d.*) AS devices
@@ -306,16 +220,6 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
-<<<<<<< HEAD
-app.patch('/admin/device/:serial/params', auth, adminOnly, async (req,res) => {
-  // body = { phone:'...', red_cm:42, ... }  ← dowolny podzbiór
-  const updates = [];
-  const vals    = [];
-  let i = 1;
-  for (const [k,v] of Object.entries(req.body)) {
-    updates.push(`${k}=$${i++}`);
-    vals.push(v);
-=======
 
 ///////////Dla  admina co moze a co nie moze///////
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
@@ -384,25 +288,9 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   } catch (err) {
     console.error(`❌ [PATCH /admin/device/${serial}/params] Błąd bazy:`, err);
     return res.status(500).send('Błąd serwera');
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   }
 });
 
-<<<<<<< HEAD
-app.post('/login', async (req,res) => {
-  const { email, password } = req.body;
-  const { rows } = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]);
-  const u = rows[0];
-  if (!u || !(await bcrypt.compare(password, u.password_hash))) {
-    return res.status(401).send('Bad creds');
-  }
-  const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET);
-  res.json({ token });
-});
-
-app.post('/admin/create-user', auth, adminOnly, async (req,res) => {
-  const { email, password, role='client', name='', company='' } = req.body;
-=======
 
 // 3) POST /login — logowanie
 app.post('/login', async (req, res) => {
@@ -520,42 +408,21 @@ app.post('/forgot-password', async (req, res) => {
 app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   const { email, password, role='client', name='', company='' } = req.body;
   console.log(`➕ [POST /admin/create-user] Tworzę usera: ${email}`);
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const hash = await bcrypt.hash(password, 10);
   await db.query(
     'INSERT INTO users(email,password_hash,role,name,company) VALUES($1,$2,$3,$4,$5)',
     [email.toLowerCase(), hash, role, name, company]
   );
-<<<<<<< HEAD
-  res.send('User created');
-});
-
-app.get('/me/devices', auth, async (req,res) => {
-=======
   console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
   res.send('User created');
 });
 
 // 6) GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
 app.get('/me/devices', auth, async (req, res) => {
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });
 
-<<<<<<< HEAD
-app.put('/device/:id/phone', auth, async (req,res) => {
-  const phone = normalisePhone(req.body.phone);
-  if (!phone) return res.status(400).send('Invalid phone');
-  await db.query('UPDATE devices SET phone=$1 WHERE id=$2 AND user_id=$3', [phone, req.params.id, req.user.id]);
-  res.send('Updated');
-});
-
-/**
- * DELETE /admin/user/:email
- * – usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
- */
-=======
 // 7) PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
 app.put('/device/:id/phone', auth, async (req, res) => {
   const phone = normalisePhone(req.body.phone);
@@ -569,7 +436,6 @@ app.put('/device/:id/phone', auth, async (req, res) => {
 });
 
 // 8) DELETE /admin/user/:email — usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   const email = req.params.email.toLowerCase();
   console.log(`🗑️ [DELETE /admin/user/${email}] Próba usunięcia usera`);
@@ -590,18 +456,11 @@ app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   }
 });
 
-<<<<<<< HEAD
-// create device + user (simplified – same as v0.2)
-app.post('/admin/create-device-with-user', auth, adminOnly, async (req,res) => {
-  try {
-    const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
-=======
 // 9) POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
   try {
     const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
     console.log(`➕ [POST /admin/create-device-with-user] Dodaję device ${serie_number} dla ${email}`);
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     if (!serie_number || !email) return res.status(400).send('serie_number & email required');
 
     // create/find user
@@ -629,45 +488,27 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     );
 
     // wysyłka e-mail & SMS
-<<<<<<< HEAD
-    await sendEmail(
-      email,
-=======
     console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
     await sendEmail(
       email.toLowerCase(),
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       '✅ Konto TechioT',
       `Twoje konto jest gotowe.<br>Login: ${email}<br>Hasło: ${basePwd}`
     );
     if (normalisePhone(phone)) {
-<<<<<<< HEAD
-=======
       console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
     }
     await updateHelium(serie_number, name, street);
 
-<<<<<<< HEAD
-    res.json({ user_id: userId, device: dRows[0] });
-  } catch (e) {
-    console.error(e);
-=======
     console.log(`✅ [POST /admin/create-device-with-user] Użytkownik i urządzenie dodane.`);
     res.json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     res.status(500).send(e.message);
   }
 });
 
-<<<<<<< HEAD
-// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params) ──────────────────
-=======
 // ── FIXED /uplink ENDPOINT (dodano znacznik ts do params + email alert) ────
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.post('/uplink', async (req, res) => {
   try {
     /* 1) devEUI ---------------------------------------------------------- */
@@ -695,29 +536,20 @@ app.post('/uplink', async (req, res) => {
       WHERE serial_number = $1`,
       [devEui]
     );
-<<<<<<< HEAD
-    if (!dev.rowCount) return res.status(404).send('Unknown device');
-    const d = dev.rows[0];  // stara flaga → d.old_flag
-=======
     if (!dev.rowCount) {
       console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
       return res.status(404).send('Unknown device');
     }
     const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     /* 3) payload --------------------------------------------------------- */
     const obj      = req.body.object || {};
     const distance = obj.distance ?? null;  // cm
     const voltage  = obj.voltage  ?? null;  // V
-<<<<<<< HEAD
-    if (distance === null) return res.send('noop (no distance)');
-=======
     if (distance === null) {
       console.log(`ℹ️ [POST /uplink] Brak distance dla ${devEui}, pomijam`);
       return res.send('noop (no distance)');
     }
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     // dodajemy znacznik czasu ISO-8601
     const varsToSave = {
@@ -737,11 +569,6 @@ app.post('/uplink', async (req, res) => {
                               ELSE trigger_dist
                             END
        WHERE id = $1
-<<<<<<< HEAD
-       RETURNING trigger_dist AS new_flag, red_cm, sms_limit,
-                 phone, phone2, tel_do_szambiarza, street`;
-    const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
-=======
        RETURNING 
          trigger_dist AS new_flag, 
          red_cm, 
@@ -763,7 +590,6 @@ if (row.stale_alert_sent) {
   console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
 }
 
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
     if (d.old_flag && !row.new_flag) {
@@ -774,45 +600,17 @@ if (row.stale_alert_sent) {
       );
     }
 
-<<<<<<< HEAD
-    /* 4b) wygodne logowanie --------------------------------------------- */
-    const ref = row.red_cm;  // próg alarmu
-    const pct = Math.round(((distance - ref) / -ref) * 100);
-    console.log(
-      `Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
-=======
     /* 4b) logowanie wartości ------------------------------------------------ */
     const ref = row.red_cm;  // próg alarmu
     const pct = Math.round(((distance - ref) / -ref) * 100);
     console.log(
       `🚀 Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     );
 
     /* 5) ALARM SMS + ALARM E-MAIL (po przekroczeniu progu) ---------------- */
     if (!d.old_flag && row.new_flag) {
       console.log(`📲 [POST /uplink] Próg przekroczony dla ${devEui} → wysyłam alerty`);
 
-<<<<<<< HEAD
-      /* 5a) użytkownik ------------------------------------------------- */
-      if (phones.length && row.sms_limit >= phones.length) {
-        await sendSMS(
-          phones,
-          `Poziom ${distance} cm przekroczyl próg ${row.red_cm} cm`
-        );
-        row.sms_limit -= phones.length;
-      }
-      /* 5b) szambiarz --------------------------------------------------- */
-      if (szambTel && row.sms_limit > 0) {
-        await sendSMS(
-          [szambTel],
-          `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${phones[0] || 'brak'}`
-        );
-        row.sms_limit -= 1;
-      }
-      /* 5c) aktualizacja limitu ---------------------------------------- */
-      await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
-=======
       // 5a) SMS na phone i phone2 (jeśli istnieją i jeśli sms_limit > 0)
       const toNumbers = [];
       if (row.phone) {
@@ -880,7 +678,6 @@ if (row.stale_alert_sent) {
       } else {
         console.log(`⚠️ [POST /uplink] alert_email nie jest ustawione, pomijam e-mail`);
       }
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     }
 
     return res.send('OK');
@@ -890,41 +687,23 @@ if (row.stale_alert_sent) {
   }
 });
 
-<<<<<<< HEAD
-/* ─────── GET kolumn urządzenia ─────── */
-/* ------------------------------------------------------------------
- *  GET /device/:serial_number/vars
- *  Zwraca distance, voltage, ts, empty_cm / empty_ts i policzony %.
- * ----------------------------------------------------------------- */
-=======
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial_number/vars – zwraca distance, voltage, ts, empty_cm, empty_ts i procent
 // ─────────────────────────────────────────────────────────────────────────────
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.get('/device/:serial_number/vars', auth, async (req, res) => {
   const { serial_number } = req.params;
   const q = `
     SELECT
-<<<<<<< HEAD
-      (params ->> 'distance')::int                      AS distance,
-      (params ->> 'voltage')::numeric                   AS voltage,
-      params ->> 'ts'                  AS ts,
-=======
       (params ->> 'distance')::int      AS distance,
       (params ->> 'voltage')::numeric   AS voltage,
       params ->> 'ts'                   AS ts,
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       empty_cm,
       empty_ts,
       CASE
         WHEN empty_cm IS NOT NULL
           THEN ROUND( ( (params->>'distance')::int - empty_cm )::numeric
                       / (0-empty_cm) * 100 )
-<<<<<<< HEAD
-      END                                              AS procent
-=======
       END                               AS procent
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     FROM devices
     WHERE serial_number = $1
     LIMIT 1`;
@@ -936,15 +715,10 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
-<<<<<<< HEAD
-/* ─────── PATCH kolumn urządzenia ─────── */
-app.patch('/device/:serial/params', async (req, res) => {
-=======
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /device/:serial/params – zapis nowych parametrów (walidacja kluczy)
 // ─────────────────────────────────────────────────────────────────────────────
 app.patch('/device/:serial/params', auth, async (req, res) => {
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const { serial } = req.params;
   const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
 
@@ -1001,9 +775,6 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
   }
 });
 
-<<<<<<< HEAD
-=======
 
->>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

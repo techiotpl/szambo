@@ -15,6 +15,7 @@ const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
+const geoip = require('geoip-lite');
 require('dotenv').config();
 
 const app  = express();
@@ -205,6 +206,57 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const { rows } = await db.query(q);
   res.json(rows);
 });
+
+
+// ─── MINI "Baza" banerów ─────────────────────────────────────────────
+const ADS = {
+  'Szczecin': [
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48911223344' }
+  ],
+  'Bydgoszcz': [
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.png', href: 'tel:+48500111222' }
+  ],
+  'OTHER': [
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.png', href: 'https://uniwersal-szambiarka.pl' }
+  ]
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /ads?city=<opcjonalneMiasto>
+// Zwraca listę banerów [{img, href}] albo []
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/ads', (req, res) => {
+  // 0) Globalny wyłącznik
+  if (process.env.ADS_ENABLED !== 'true') {
+    return res.json([]);
+  }
+
+  // 1) Spróbuj wziąć miasto z query stringa (do testów lub debugowania)
+  let city = (req.query.city || '').trim();
+
+  // 2) Jeśli nie podano w URL → użyj GeoIP (po IP klienta)
+  if (!city) {
+    // Jeśli jest load-balancer → header X-Forwarded-For ma rzeczywiste IP
+    const ipHeader = req.headers['x-forwarded-for'] || req.ip || '';
+    const ip = ipHeader.split(',')[0].trim();
+    const geo = geoip.lookup(ip);
+    if (geo && geo.city) {
+      city = geo.city;
+    }
+  }
+
+  // 3) Normalizacja: pierwsza litera duża, reszta małe (żeby pasowało do kluczy w ADS)
+  if (city) {
+    city = city[0].toUpperCase() + city.slice(1).toLowerCase();
+  }
+
+  // 4) Pobierz reklamy dla danego miasta lub (jeśli nie ma wpisu) z klucza 'OTHER'
+  const adsList = ADS[city] || ADS['OTHER'] || [];
+
+  return res.json(adsList);
+});
+
+
 
 // 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
 app.get('/device/:serial/params', auth, async (req, res) => {

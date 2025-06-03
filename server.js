@@ -233,6 +233,8 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'tel_do_szambiarza',
     'street',
     'red_cm',
+    'serie_number',
+    'abonament_expiry',
     'sms_limit',
     'alert_email',
     'trigger_dist'  // tutaj jako rzeczywisty boolean

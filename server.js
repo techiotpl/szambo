@@ -214,7 +214,7 @@ const ADS = {
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48911223344' }
   ],
   'Bydgoszcz': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.png', href: 'tel:+48500111222' }
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48500111222' }
   ],
   'OTHER': [
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '515490145' }

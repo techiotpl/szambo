@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+     "cron:stale": "node jobs/check-stale-devices.js",
+    "cron:decrement": "node jobs/decrement-abonament.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {

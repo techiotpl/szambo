@@ -1,6 +1,12 @@
-// iot_backend_nodejs/
+// server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + debug + próg z e-mailem)
+
 // ─────────────────────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 // server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid)
+=======
+// Uwaga: usunęliśmy tutaj całą logikę „notify-stale (72h)”.
+// Skupiamy się wyłącznie na /uplink + wysyłce SMS + e-mail przy przekroczeniu progu.
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 // ─────────────────────────────────────────────────────────────────────────────
 
 const express    = require('express');
@@ -12,6 +18,7 @@ const axios      = require('axios');
 const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
+const crypto     = require('crypto'); // do losowania nowego hasła
 require('dotenv').config();
 
 const app  = express();
@@ -50,7 +57,6 @@ CREATE TABLE IF NOT EXISTS devices (
   tel_do_szambiarza TEXT,
   street TEXT,
   sms_limit INT  DEFAULT 30,
-  email_limit INT DEFAULT 30,
   red_cm INT    DEFAULT 30,
   empty_cm INT  DEFAULT 150,
   empty_ts TIMESTAMPTZ,
@@ -58,10 +64,81 @@ CREATE TABLE IF NOT EXISTS devices (
   trigger_dist BOOLEAN DEFAULT false,
   params JSONB  DEFAULT '{}',
   abonament_expiry DATE,
+<<<<<<< HEAD
+=======
+  alert_email TEXT,
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   created_at TIMESTAMPTZ DEFAULT now()
 );
 `;
-(async () => { await db.query(MIGRATION); })();
+(async () => {
+  try {
+    await db.query(MIGRATION);
+    console.log('✅ Migration executed (tables ensured).');
+  } catch (e) {
+    console.error('❌ Migration error:', e);
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMTP KONFIGURACJA (nodemailer)
+// ─────────────────────────────────────────────────────────────────────────────
+const smtpHost   = process.env.SMTP_HOST;
+const smtpPort   = parseInt(process.env.SMTP_PORT || '465', 10);
+const smtpSecure = (process.env.SMTP_SECURE === 'true');
+const smtpUser   = process.env.SMTP_USER;
+const smtpPass   = process.env.SMTP_PASS;
+const smtpFrom   = process.env.SMTP_FROM;   // np. 'TechioT <noreply@techiot.pl>'
+
+if (!smtpHost || !smtpPort || !smtpUser || !smtpPass || !smtpFrom) {
+  console.warn('⚠️ Brakuje zmiennych SMTP_* w środowisku. E-mail nie będzie działać.');
+}
+
+const transporter = nodemailer.createTransport({
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure, // true jeśli port 465
+  auth: {
+    user: smtpUser,
+    pass: smtpPass
+  },
+  tls: {
+    rejectUnauthorized: false
+  }
+});
+
+// Sprawdź połączenie z serwerem SMTP przy starcie
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('❌ SMTP transporter verification failed:', error);
+  } else {
+    console.log('✅ SMTP transporter is ready to send messages');
+  }
+});
+
+/**
+ * Wysyła e-mail przez SMTP (nodemailer).
+ * - `to` może być stringiem (pojedynczy email) lub tablicą stringów.
+ * - `subj` to temat wiadomości (string).
+ * - `html` to zawartość wiadomości w formacie HTML (string).
+ */
+async function sendEmail(to, subj, html) {
+  if (!transporter) {
+    throw new Error('SMTP transporter nie jest skonfigurowany');
+  }
+
+  const recipients = Array.isArray(to) ? to.join(', ') : to;
+  const mailOptions = {
+    from: smtpFrom,
+    to: recipients,
+    subject: subj,
+    html: html
+  };
+
+  console.log(`✉️ Próbuję wysłać e-maila do: ${recipients} (temat: "${subj}")`);
+  const info = await transporter.sendMail(mailOptions);
+  console.log('✅ Wysłano e-mail przez SMTP:', info.messageId);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SMTP KONFIGURACJA (nodemailer)
@@ -116,24 +193,39 @@ async function sendEmail(to, subj, html) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
-function removePolishLetters(str="") {
-  const pl = { 'ą':'a','ć':'c','ę':'e','ł':'l','ń':'n','ó':'o','ś':'s','ź':'z','ż':'z','Ą':'A','Ć':'C','Ę':'E','Ł':'L','Ń':'N','Ó':'O','Ś':'S','Ź':'Z','Ż':'Z' };
-  return str.replace(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g, m=>pl[m]);
+function removePolishLetters(str = "") {
+  const pl = {
+    'ą':'a','ć':'c','ę':'e','ł':'l','ń':'n','ó':'o','ś':'s','ź':'z','ż':'z',
+    'Ą':'A','Ć':'C','Ę':'E','Ł':'L','Ń':'N','Ó':'O','Ś':'S','Ź':'Z','Ż':'Z'
+  };
+  return str.replace(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g, m => pl[m]);
 }
-function normalisePhone(p){ if(!p||p.length<9) return null; return p.startsWith('+48')?p:'+48'+p; }
 
-async function sendSMS(phone,msg){
-  const { SMSAPIKEY:key, SMSAPIPASSWORD:pwd } = process.env;
-  if(!key||!pwd) throw new Error('SMS keys missing');
+function normalisePhone(p) {
+  if (!p || p.length < 9) return null;
+  return p.startsWith('+48') ? p : '+48' + p;
+}
+
+async function sendSMS(phone, msg) {
+  const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
+  if (!key || !pwd) throw new Error('SMS keys missing');
   const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
-  const r = await axios.post(url,null,{headers:{Accept:'application/json'}});
-  if(r.status!==200) throw new Error('SMSplanet HTTP '+r.status);
+  const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
+  if (r.status !== 200) throw new Error('SMSplanet HTTP ' + r.status);
 }
 
+<<<<<<< HEAD
 async function updateHelium(serie,name,street){
   const token=(process.env.HELIUMBEARER||'').trim(); if(!token) return;
   await axios.put(`https://console.helium-iot.xyz/api/devices/${serie}`,{
     device:{
+=======
+async function updateHelium(serie, name, street) {
+  const token = (process.env.HELIUMBEARER || '').trim();
+  if (!token) return;
+  await axios.put(`https://console.helium-iot.xyz/api/devices/${serie}`, {
+    device: {
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       applicationId: "b1b1bc39-ce10-49f3-88de-3999b1da5cf4",
       deviceProfileId: "8a862a36-3aba-4c14-9a47-a41a5e33684e",
       name,
@@ -141,24 +233,42 @@ async function updateHelium(serie,name,street){
       tags:{},
       variables:{}
     }
+<<<<<<< HEAD
   },{headers:{Accept:'application/json',Authorization:`Bearer ${token}`}});
+=======
+  }, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH MIDDLEWARE
 // ─────────────────────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 function auth(req,res,next){
   const token=req.headers.authorization?.split(' ')[1];
   if(!token) return res.status(401).send('Missing token');
   try { 
     req.user = jwt.verify(token, JWT_SECRET);
     return next(); 
+=======
+function auth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).send('Missing token');
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   } catch {
     return res.status(401).send('Invalid token');
   }
 }
+<<<<<<< HEAD
 function adminOnly(req,res,next){ 
   if(req.user.role !== 'admin') return res.status(403).send('Forbidden');
+=======
+function adminOnly(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).send('Forbidden');
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   next();
 }
 
@@ -166,7 +276,12 @@ function adminOnly(req,res,next){
 // ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
 app.get('/admin/users-with-devices', auth, adminOnly, async (req,res) => {
+=======
+// 1) GET /admin/users-with-devices (auth + adminOnly)
+app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const q = `
     SELECT u.id, u.email, u.name,
            json_agg(d.*) AS devices
@@ -177,15 +292,12 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req,res) => {
   res.json(rows);
 });
 
-/* ------------------------------------------------------------------
- *  GET /device/:serial/params
- *  Zwraca pola konfiguracyjne widoczne w „Ustawieniach”.
- * ----------------------------------------------------------------- */
+// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
-    SELECT phone, phone2, tel_do_szambiarza,
-           red_cm, sms_limit, email_limit,
+    SELECT phone, phone2, tel_do_szambiarza, alert_email,
+           red_cm, sms_limit,
            empty_cm, empty_ts, abonament_expiry
       FROM devices
      WHERE serial_number = $1`;
@@ -194,6 +306,7 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
+<<<<<<< HEAD
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req,res) => {
   // body = { phone:'...', red_cm:42, ... }  ← dowolny podzbiór
   const updates = [];
@@ -202,12 +315,80 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req,res) => {
   for (const [k,v] of Object.entries(req.body)) {
     updates.push(`${k}=$${i++}`);
     vals.push(v);
+=======
+
+///////////Dla  admina co moze a co nie moze///////
+app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
+  const { serial } = req.params;
+  const body = req.body;
+
+  // ◾️ Lista dozwolonych pól dla admina (w tym trigger_dist jako BOOLEAN)
+  const allowedFields = new Set([
+    'phone',
+    'phone2',
+    'tel_do_szambiarza',
+    'street',
+    'red_cm',
+    'serial_number',
+    'abonament_expiry',
+    'sms_limit',
+    'alert_email',
+    'trigger_dist'  // tutaj jako rzeczywisty boolean
+  ]);
+
+  const cols = [];
+  const vals = [];
+  let i = 1;
+
+  for (const [k, v] of Object.entries(body)) {
+    if (!allowedFields.has(k)) {
+      console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
+      return res.status(400).send(`Niedozwolone pole: ${k}`);
+    }
+
+    // ◾️ Walidacja poszczególnych kluczy:
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    }
+    if (k === 'red_cm' || k === 'sms_limit') {
+      const num = Number(v);
+      if (Number.isNaN(num) || num < 0) {
+        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+      }
+    }
+    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
+      return res.status(400).send('Niepoprawny email');
+    }
+    if (k === 'trigger_dist') {
+      // Teraz V musi być prawdziwym booleanem, a nie np. 0 albo 1
+      if (typeof v !== 'boolean') {
+        return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
+      }
+    }
+
+    cols.push(`${k} = $${i++}`);
+    vals.push(v);
   }
-  vals.push(req.params.serial);
-  await db.query(`UPDATE devices SET ${updates.join(',')} WHERE serial_number=$${i}`, vals);
-  res.send('updated');
+
+  if (!cols.length) {
+    console.log(`❌ [PATCH /admin/device/${serial}/params] Brak danych do zaktualizowania`);
+    return res.status(400).send('Brak danych do aktualizacji');
+  }
+
+  vals.push(serial);
+  const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
+  try {
+    await db.query(q, vals);
+    console.log(`✅ [PATCH /admin/device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error(`❌ [PATCH /admin/device/${serial}/params] Błąd bazy:`, err);
+    return res.status(500).send('Błąd serwera');
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
+  }
 });
 
+<<<<<<< HEAD
 app.post('/login', async (req,res) => {
   const { email, password } = req.body;
   const { rows } = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]);
@@ -221,19 +402,148 @@ app.post('/login', async (req,res) => {
 
 app.post('/admin/create-user', auth, adminOnly, async (req,res) => {
   const { email, password, role='client', name='', company='' } = req.body;
+=======
+
+// 3) POST /login — logowanie
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  // ▪ Podstawowa walidacja inputu:
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    console.log(`❌ [POST /login] Niepoprawny email: ${email}`);
+    return res.status(400).send('Niepoprawny email');
+  }
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    console.log(`❌ [POST /login] Za krótkie hasło dla: ${email}`);
+    return res.status(400).send('Hasło musi mieć minimum 6 znaków');
+  }
+
+  console.log(`🔑 [POST /login] próba logowania użytkownika: ${email}`);
+  let rows;
+  try {
+    ({ rows } = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()]));
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd bazy przy pobieraniu usera:`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
+  const u = rows[0];
+  if (!u) {
+    console.log(`❌ [POST /login] Brak usera: ${email}`);
+    return res.status(401).send('Niepoprawne dane logowania');
+  }
+
+  let passwordMatches;
+  try {
+    passwordMatches = await bcrypt.compare(password, u.password_hash);
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd bcrypt dla: ${email}`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
+  if (!passwordMatches) {
+    console.log(`❌ [POST /login] Złe hasło dla usera: ${email}`);
+    return res.status(401).send('Niepoprawne dane logowania');
+  }
+
+  let token;
+  try {
+    // ▪ Bez parametru expiresIn → token ważny do zmiany JWT_SECRET
+    token = jwt.sign(
+      { id: u.id, email: u.email, role: u.role },
+      JWT_SECRET
+    );
+  } catch (err) {
+    console.error(`❌ [POST /login] Błąd przy generowaniu tokenu dla: ${email}`, err);
+    return res.status(500).send('Błąd serwera');
+  }
+
+  console.log(`✅ [POST /login] Poprawne logowanie: ${email}`);
+  return res.json({ token });
+});
+
+
+// 4) POST /forgot-password — generuje nowe hasło, zapisuje w bazie i wysyła e-mail
+app.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // ▪ Walidacja: sprawdź, czy email jest stringiem i zawiera '@'
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      console.log('❌ [POST /forgot-password] Niepoprawny email:', email);
+      return res.status(400).send('Niepoprawny email');
+    }
+
+    console.log(`🔄 [POST /forgot-password] Prośba o reset hasła dla: ${email}`);
+    const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (!rows.length) {
+      console.log(`⚠️ [POST /forgot-password] Nie znaleziono usera o e-mailu: ${email}`);
+      // Zwracamy 200 nawet jeśli nie ma konta (żeby nie ujawniać, kto jest w bazie)
+      return res
+        .status(200)
+        .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
+    }
+
+    // Generowanie i hashowanie nowego hasła
+    const newPassword = crypto.randomBytes(4).toString('hex');
+    console.log(`🔑 [POST /forgot-password] Wygenerowane hasło dla ${email}: ${newPassword}`);
+    const newHash = await bcrypt.hash(newPassword, 10);
+
+    // Zapis nowego hasha do bazy
+    await db.query('UPDATE users SET password_hash = $1 WHERE email = $2', [newHash, email.toLowerCase()]);
+    console.log(`✅ [POST /forgot-password] Zaktualizowano hasło w bazie dla ${email}`);
+
+    // Wysyłka e-maila
+    const htmlContent = `
+      <p>Cześć,</p>
+      <p>Na Twoją prośbę wygenerowaliśmy nowe hasło do konta TechioT.</p>
+      <p><strong>Twoje nowe hasło:</strong> <code>${newPassword}</code></p>
+     
+      <br>
+      <p>Pozdrawiamy,<br>TechioT</p>
+    `;
+    console.log(`✉️ [POST /forgot-password] Wysyłam maila do ${email}`);
+    await sendEmail(email.toLowerCase(), 'Twoje nowe hasło – TechioT', htmlContent);
+    console.log(`✅ [POST /forgot-password] Mail z nowym hasłem wysłany do ${email}`);
+
+    return res
+      .status(200)
+      .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
+  } catch (err) {
+    console.error('❌ Error in /forgot-password:', err);
+    return res.status(500).send('Internal server error');
+  }
+});
+
+
+// 5) POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
+app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
+  const { email, password, role='client', name='', company='' } = req.body;
+  console.log(`➕ [POST /admin/create-user] Tworzę usera: ${email}`);
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const hash = await bcrypt.hash(password, 10);
   await db.query(
     'INSERT INTO users(email,password_hash,role,name,company) VALUES($1,$2,$3,$4,$5)',
     [email.toLowerCase(), hash, role, name, company]
   );
+<<<<<<< HEAD
   res.send('User created');
 });
 
 app.get('/me/devices', auth, async (req,res) => {
+=======
+  console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
+  res.send('User created');
+});
+
+// 6) GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
+app.get('/me/devices', auth, async (req, res) => {
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });
 
+<<<<<<< HEAD
 app.put('/device/:id/phone', auth, async (req,res) => {
   const phone = normalisePhone(req.body.phone);
   if (!phone) return res.status(400).send('Invalid phone');
@@ -245,27 +555,53 @@ app.put('/device/:id/phone', auth, async (req,res) => {
  * DELETE /admin/user/:email
  * – usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
  */
+=======
+// 7) PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
+app.put('/device/:id/phone', auth, async (req, res) => {
+  const phone = normalisePhone(req.body.phone);
+  if (!phone) return res.status(400).send('Invalid phone');
+  await db.query('UPDATE devices SET phone=$1 WHERE id=$2 AND user_id=$3', [
+    phone,
+    req.params.id,
+    req.user.id
+  ]);
+  res.send('Updated');
+});
+
+// 8) DELETE /admin/user/:email — usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   const email = req.params.email.toLowerCase();
+  console.log(`🗑️ [DELETE /admin/user/${email}] Próba usunięcia usera`);
   try {
     const result = await db.query(
       'DELETE FROM users WHERE email = $1 RETURNING id',
       [email]
     );
     if (result.rowCount === 0) {
+      console.log(`⚠️ [DELETE /admin/user/${email}] Użytkownik nie istniał`);
       return res.status(404).send(`User ${email} not found`);
     }
+    console.log(`✅ [DELETE /admin/user/${email}] Usunięto użytkownika i urządzenia`);
     return res.send(`Deleted user ${email} and their devices`);
   } catch (err) {
-    console.error(err);
+    console.error(`❌ Error in DELETE /admin/user/${email}:`, err);
     return res.status(500).send(err.message);
   }
 });
 
+<<<<<<< HEAD
 // create device + user (simplified – same as v0.2)
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req,res) => {
   try {
     const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
+=======
+// 9) POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
+app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
+  try {
+    const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
+    console.log(`➕ [POST /admin/create-device-with-user] Dodaję device ${serie_number} dla ${email}`);
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     if (!serie_number || !email) return res.status(400).send('serie_number & email required');
 
     // create/find user
@@ -293,48 +629,95 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req,res) => {
     );
 
     // wysyłka e-mail & SMS
+<<<<<<< HEAD
     await sendEmail(
       email,
+=======
+    console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
+    await sendEmail(
+      email.toLowerCase(),
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       '✅ Konto TechioT',
       `Twoje konto jest gotowe.<br>Login: ${email}<br>Hasło: ${basePwd}`
     );
     if (normalisePhone(phone)) {
+<<<<<<< HEAD
+=======
+      console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
     }
     await updateHelium(serie_number, name, street);
 
+<<<<<<< HEAD
     res.json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error(e);
+=======
+    console.log(`✅ [POST /admin/create-device-with-user] Użytkownik i urządzenie dodane.`);
+    res.json({ user_id: userId, device: dRows[0] });
+  } catch (e) {
+    console.error('❌ Error in /admin/create-device-with-user:', e);
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     res.status(500).send(e.message);
   }
 });
 
+<<<<<<< HEAD
 // ── FIXED /uplink ENDPOINT (dodano znacznik ts do params) ──────────────────
+=======
+// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params + email alert) ────
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.post('/uplink', async (req, res) => {
   try {
     /* 1) devEUI ---------------------------------------------------------- */
     const devEui = req.body.dev_eui
                  || req.body.devEUI
                  || req.body.deviceInfo?.devEui;
-    if (!devEui) return res.status(400).send('dev_eui missing');
+    if (!devEui) {
+      console.log('🚫 [POST /uplink] Brak dev_eui w body');
+      return res.status(400).send('dev_eui missing');
+    }
 
     /* 2) urządzenie w bazie --------------------------------------------- */
     const dev = await db.query(
-      `SELECT id, phone, phone2, tel_do_szambiarza, street,
-              red_cm, trigger_dist AS old_flag, sms_limit
-         FROM devices
-        WHERE serial_number = $1`,
+      `SELECT 
+         id, 
+         phone, 
+         phone2, 
+         tel_do_szambiarza, 
+         street,
+         red_cm, 
+         trigger_dist AS old_flag, 
+         sms_limit,
+         alert_email
+       FROM devices
+      WHERE serial_number = $1`,
       [devEui]
     );
+<<<<<<< HEAD
     if (!dev.rowCount) return res.status(404).send('Unknown device');
     const d = dev.rows[0];  // stara flaga → d.old_flag
+=======
+    if (!dev.rowCount) {
+      console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
+      return res.status(404).send('Unknown device');
+    }
+    const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     /* 3) payload --------------------------------------------------------- */
     const obj      = req.body.object || {};
     const distance = obj.distance ?? null;  // cm
     const voltage  = obj.voltage  ?? null;  // V
+<<<<<<< HEAD
     if (distance === null) return res.send('noop (no distance)');
+=======
+    if (distance === null) {
+      console.log(`ℹ️ [POST /uplink] Brak distance dla ${devEui}, pomijam`);
+      return res.send('noop (no distance)');
+    }
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     // dodajemy znacznik czasu ISO-8601
     const varsToSave = {
@@ -343,7 +726,7 @@ app.post('/uplink', async (req, res) => {
       ts: new Date().toISOString()
     };
 
-    /* 4) zapis + nowa flaga ---------------------------------------------- */
+    /* 4) zapis + obliczenie nowej flagi ---------------------------------- */
     const q = `
       UPDATE devices
          SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
@@ -354,32 +737,63 @@ app.post('/uplink', async (req, res) => {
                               ELSE trigger_dist
                             END
        WHERE id = $1
+<<<<<<< HEAD
        RETURNING trigger_dist AS new_flag, red_cm, sms_limit,
                  phone, phone2, tel_do_szambiarza, street`;
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
+=======
+       RETURNING 
+         trigger_dist AS new_flag, 
+         red_cm, 
+         sms_limit,
+         phone, 
+         phone2, 
+         tel_do_szambiarza, 
+         street,
+         stale_alert_sent,
+         alert_email`;
+    const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
+
+    // --- jeśli czujnik znowu wysłał pomiar – kasujemy znacznik „72 h alert wysłany”
+if (row.stale_alert_sent) {
+  await db.query(
+    'UPDATE devices SET stale_alert_sent = FALSE WHERE id = $1',
+    [d.id]
+  );
+  console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
+}
+
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
     if (d.old_flag && !row.new_flag) {
+      console.log(`⚡ [POST /uplink] Zapisuję empty_cm/empty_ts dla ${devEui}`);
       await db.query(
         'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
         [distance, d.id]
       );
     }
 
+<<<<<<< HEAD
     /* 4b) wygodne logowanie --------------------------------------------- */
     const ref = row.red_cm;  // próg alarmu
     const pct = Math.round(((distance - ref) / -ref) * 100);
     console.log(
       `Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
+=======
+    /* 4b) logowanie wartości ------------------------------------------------ */
+    const ref = row.red_cm;  // próg alarmu
+    const pct = Math.round(((distance - ref) / -ref) * 100);
+    console.log(
+      `🚀 Saved uplink ${devEui}: ${distance} cm (≈${pct}%); red=${ref}; flag ${d.old_flag}→${row.new_flag}`
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     );
 
-    /* 5) SMS alarmowe ---------------------------------------------------- */
-    if (!d.old_flag && row.new_flag && row.sms_limit > 0) {
-      const norm = p => p && p.length >= 9
-          ? (p.startsWith('+48') ? p : '+48'+p) : null;
-      const phones   = [norm(row.phone), norm(row.phone2)].filter(Boolean);
-      const szambTel = norm(row.tel_do_szambiarza);
+    /* 5) ALARM SMS + ALARM E-MAIL (po przekroczeniu progu) ---------------- */
+    if (!d.old_flag && row.new_flag) {
+      console.log(`📲 [POST /uplink] Próg przekroczony dla ${devEui} → wysyłam alerty`);
 
+<<<<<<< HEAD
       /* 5a) użytkownik ------------------------------------------------- */
       if (phones.length && row.sms_limit >= phones.length) {
         await sendSMS(
@@ -398,61 +812,198 @@ app.post('/uplink', async (req, res) => {
       }
       /* 5c) aktualizacja limitu ---------------------------------------- */
       await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
+=======
+      // 5a) SMS na phone i phone2 (jeśli istnieją i jeśli sms_limit > 0)
+      const toNumbers = [];
+      if (row.phone) {
+        const p = normalisePhone(row.phone);
+        if (p) toNumbers.push(p);
+      }
+      if (row.phone2) {
+        const p2 = normalisePhone(row.phone2);
+        if (p2) toNumbers.push(p2);
+      }
+      if (toNumbers.length && row.sms_limit > 0) {
+        const msg = `⚠️ Poziom ${distance} cm przekroczył próg ${row.red_cm} cm`;
+        console.log(`📲 [POST /uplink] Wysyłam SMS na: ${toNumbers.join(', ')}`);
+        let usedSms = 0;
+        for (const num of toNumbers) {
+          if (row.sms_limit - usedSms <= 0) break; // nie ma już limitu
+          try {
+            await sendSMS(num, msg);
+            usedSms++;
+          } catch (smsErr) {
+            console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
+          }
+        }
+        row.sms_limit -= usedSms;
+      } else {
+        console.log(`⚠️ [POST /uplink] sms_limit=0 lub brak numerów, pomijam SMS`);
+      }
+
+      // 5b) SMS dla szambiarza (jeśli istnieje i jeśli sms_limit > 0)
+      if (row.tel_do_szambiarza && row.sms_limit > 0) {
+        const szam = normalisePhone(row.tel_do_szambiarza);
+        if (szam) {
+          const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${toNumbers[0] || 'brak'}`;
+          try {
+            console.log(`📲 [POST /uplink] Wysyłam SMS do szambiarza: ${szam}`);
+            await sendSMS(szam, msg2);
+            row.sms_limit--;
+          } catch (smsErr) {
+            console.error(`❌ Błąd przy wysyłaniu SMS do szambiarza (${szam}):`, smsErr);
+          }
+        }
+      }
+
+      // 5c) Zaktualizuj pozostały sms_limit
+      await db.query('UPDATE devices SET sms_limit=$1 WHERE id=$2', [row.sms_limit, d.id]);
+      console.log(`📉 [POST /uplink] Zaktualizowano sms_limit → ${row.sms_limit}`);
+
+      // 5d) WYŚLIJ e-mail, jeśli alert_email jest ustawione
+      if (row.alert_email) {
+        const mailTo = row.alert_email;
+        const subj   = `⚠️ Poziom ${distance} cm przekroczył próg na ${devEui}`;
+        const html   = `
+          <p>Cześć,</p>
+          <p>Uwaga! Urządzenie <strong>${devEui}</strong> przekroczyło próg alarmowy ${row.red_cm} cm:</p>
+          <p><strong>Aktualny poziom:</strong> ${distance} cm</p>
+          <br>
+          <p>Pozdrawiamy,<br>TechioT</p>
+        `;
+        console.log(`✉️ [POST /uplink] Wysyłam e-mail na: ${mailTo}`);
+        try {
+          await sendEmail(mailTo, subj, html);
+        } catch (emailErr) {
+          console.error(`❌ Błąd przy wysyłaniu e-maila do ${mailTo}:`, emailErr);
+        }
+      } else {
+        console.log(`⚠️ [POST /uplink] alert_email nie jest ustawione, pomijam e-mail`);
+      }
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     }
 
     return res.send('OK');
   } catch (err) {
-    console.error('Error in /uplink:', err);
+    console.error('❌ Error in /uplink:', err);
     return res.status(500).send('uplink error');
   }
 });
 
+<<<<<<< HEAD
 /* ─────── GET kolumn urządzenia ─────── */
 /* ------------------------------------------------------------------
  *  GET /device/:serial_number/vars
  *  Zwraca distance, voltage, ts, empty_cm / empty_ts i policzony %.
  * ----------------------------------------------------------------- */
+=======
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /device/:serial_number/vars – zwraca distance, voltage, ts, empty_cm, empty_ts i procent
+// ─────────────────────────────────────────────────────────────────────────────
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 app.get('/device/:serial_number/vars', auth, async (req, res) => {
   const { serial_number } = req.params;
   const q = `
     SELECT
+<<<<<<< HEAD
       (params ->> 'distance')::int                      AS distance,
       (params ->> 'voltage')::numeric                   AS voltage,
       params ->> 'ts'                  AS ts,
+=======
+      (params ->> 'distance')::int      AS distance,
+      (params ->> 'voltage')::numeric   AS voltage,
+      params ->> 'ts'                   AS ts,
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
       empty_cm,
       empty_ts,
       CASE
         WHEN empty_cm IS NOT NULL
           THEN ROUND( ( (params->>'distance')::int - empty_cm )::numeric
                       / (0-empty_cm) * 100 )
+<<<<<<< HEAD
       END                                              AS procent
+=======
+      END                               AS procent
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
     FROM devices
     WHERE serial_number = $1
     LIMIT 1`;
   const { rows } = await db.query(q, [serial_number]);
-  if (!rows.length) return res.status(404).send('Device not found');
+  if (!rows.length) {
+    console.log(`⚠️ [GET /device/${serial_number}/vars] Nie znaleziono urządzenia`);
+    return res.status(404).send('Device not found');
+  }
   res.json(rows[0]);
 });
 
+<<<<<<< HEAD
 /* ─────── PATCH kolumn urządzenia ─────── */
 app.patch('/device/:serial/params', async (req, res) => {
+=======
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /device/:serial/params – zapis nowych parametrów (walidacja kluczy)
+// ─────────────────────────────────────────────────────────────────────────────
+app.patch('/device/:serial/params', auth, async (req, res) => {
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
   const { serial } = req.params;
-  const body = req.body; // { phone: "...", red_cm: 40, ... }
+  const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
+
+  // ▪ Ustal listę dozwolonych pól
+  const allowedFields = new Set([
+    'phone',
+    'phone2',
+    'tel_do_szambiarza',
+    'alert_email',
+    'red_cm',
+     'street',
+    'sms_limit'
+    // Dodaj tu kolejne, jeśli rozszerzysz model (np. 'empty_cm' itd.)
+  ]);
 
   const cols = [];
   const vals = [];
   let i = 1;
+
   for (const [k, v] of Object.entries(body)) {
+    if (!allowedFields.has(k)) {
+      console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
+      return res.status(400).send(`Niedozwolone pole: ${k}`);
+    }
+    // Dodatkowa walidacja np. dla 'phone' – poniżej przykład minimalny:
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    }
+    if (k === 'red_cm' || k === 'sms_limit') {
+      const num = Number(v);
+      if (Number.isNaN(num) || num < 0) {
+        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+      }
+    }
+
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
-  if (!cols.length) return res.sendStatus(400);
+
+  if (!cols.length) {
+    console.log(`❌ [PATCH /device/${serial}/params] Brak danych do zaktualizowania`);
+    return res.status(400).send('Brak danych do aktualizacji');
+  }
 
   vals.push(serial); // ostatni parametr do WHERE
   const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
-  await db.query(q, vals);
-  res.sendStatus(200);
+  try {
+    await db.query(q, vals);
+    console.log(`✅ [PATCH /device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error(`❌ [PATCH /device/${serial}/params] Błąd bazy:`, err);
+    return res.status(500).send('Błąd serwera');
+  }
 });
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> d107f8f948a6df703a56b0a97ee4628b2f459398
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

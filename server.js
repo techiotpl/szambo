@@ -220,20 +220,75 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
+
+///////////Dla  admina co moze a co nie moze///////
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
-  // body = { phone:'...', red_cm:42, alert_email:'..', ... }
-  const updates = [];
-  const vals    = [];
+  const { serial } = req.params;
+  const body = req.body;
+
+  // ◾️ Lista dozwolonych pól dla admina (w tym trigger_dist jako BOOLEAN)
+  const allowedFields = new Set([
+    'phone',
+    'phone2',
+    'tel_do_szambiarza',
+    'street',
+    'red_cm',
+    'sms_limit',
+    'alert_email',
+    'trigger_dist'  // tutaj jako rzeczywisty boolean
+  ]);
+
+  const cols = [];
+  const vals = [];
   let i = 1;
-  for (const [k, v] of Object.entries(req.body)) {
-    updates.push(`${k}=$${i++}`);
+
+  for (const [k, v] of Object.entries(body)) {
+    if (!allowedFields.has(k)) {
+      console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
+      return res.status(400).send(`Niedozwolone pole: ${k}`);
+    }
+
+    // ◾️ Walidacja poszczególnych kluczy:
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    }
+    if (k === 'red_cm' || k === 'sms_limit') {
+      const num = Number(v);
+      if (Number.isNaN(num) || num < 0) {
+        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+      }
+    }
+    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
+      return res.status(400).send('Niepoprawny email');
+    }
+    if (k === 'trigger_dist') {
+      // Teraz V musi być prawdziwym booleanem, a nie np. 0 albo 1
+      if (typeof v !== 'boolean') {
+        return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
+      }
+    }
+
+    cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
-  vals.push(req.params.serial);
-  await db.query(`UPDATE devices SET ${updates.join(',')} WHERE serial_number=$${i}`, vals);
-  console.log(`✅ [PATCH /admin/device/${req.params.serial}/params] Zaktualizowano: ${JSON.stringify(req.body)}`);
-  res.send('updated');
+
+  if (!cols.length) {
+    console.log(`❌ [PATCH /admin/device/${serial}/params] Brak danych do zaktualizowania`);
+    return res.status(400).send('Brak danych do aktualizacji');
+  }
+
+  vals.push(serial);
+  const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
+  try {
+    await db.query(q, vals);
+    console.log(`✅ [PATCH /admin/device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error(`❌ [PATCH /admin/device/${serial}/params] Błąd bazy:`, err);
+    return res.status(500).send('Błąd serwera');
+  }
 });
+
 
 // 3) POST /login — logowanie
 app.post('/login', async (req, res) => {
@@ -672,9 +727,7 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     'tel_do_szambiarza',
     'alert_email',
     'red_cm',
-    'serial_number',
-    'street',
-    'trigger_distance',
+     'street',
     'sms_limit'
     // Dodaj tu kolejne, jeśli rozszerzysz model (np. 'empty_cm' itd.)
   ]);

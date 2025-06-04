@@ -11,7 +11,7 @@ require('dotenv').config();
 
 // --- konfiguracja -----------------------------------------------------------
 const db   = new Pool({ connectionString: process.env.DATABASE_URL });
-const HRS  = 72;               // próg braku odpowiedzi
+const HRS  = 1;               // próg braku odpowiedzi
 const now  = new Date();
 
 // helpers z server.js – wklejamy tyle, ile potrzebujemy

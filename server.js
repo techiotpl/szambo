@@ -1,9 +1,5 @@
 // server.js – FULL BACKEND SKELETON v0.3 (z SMTP zamiast SendGrid + debug + próg z e-mailem)
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Uwaga: usunęliśmy tutaj całą logikę „notify-stale (72h)”.
-// Skupiamy się wyłącznie na /uplink + wysyłce SMS + e-mail przy przekroczeniu progu.
-// ─────────────────────────────────────────────────────────────────────────────
+// Dodatkowo: dodany mechanizm SSE (/events) i wypychanie zdarzeń przy /uplink
 
 const express    = require('express');
 const bodyParser = require('body-parser');
@@ -15,7 +11,7 @@ const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
-const geoip = require('geoip-lite');
+const geoip      = require('geoip-lite');
 require('dotenv').config();
 
 const app  = express();
@@ -192,32 +188,64 @@ function adminOnly(req, res, next) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROUTES
+// Poniżej dodajemy prosty broker SSE:
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 1) GET /admin/users-with-devices (auth + adminOnly)
-app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
-  const q = `
-    SELECT u.id, u.email, u.name,
-           json_agg(d.*) AS devices
-      FROM users u
-      LEFT JOIN devices d ON d.user_id = u.id
-     GROUP BY u.id`;
-  const { rows } = await db.query(q);
-  res.json(rows);
+// Przechowujemy w tej tablicy obiekty `res` dla wszystkich obecnie podłączonych klientów SSE
+let clients = [];
+
+/**
+ * Wysyła zdarzenie SSE do wszystkich podłączonych klientów.
+ * `payload` to dowolny JS‐owy obiekt, np. { serial, distance, voltage, ts }.
+ */
+function sendEvent(payload) {
+  const dataAsJson = JSON.stringify(payload);
+  const msg = [
+    'event: uplink',
+    `data: ${dataAsJson}`,
+    '',
+    ''
+  ].join('\n');
+
+  // Iterujemy po wszystkich zapisanych `res` i wypisujemy wiadomość SSE
+  clients.forEach(res => {
+    res.write(msg);
+  });
+}
+
+/**
+ * Route SSE: GET /events
+ * Utrzymuje otwarte połączenie HTTP jako text/event-stream. Każdy nowy /uplink wypchnie event.
+ */
+app.get('/events', (req, res) => {
+  // Ustawiamy nagłówki wymagane przez SSE
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive'
+  });
+  res.flushHeaders();
+
+  // Dodajemy to `res` do listy aktywnych klientów
+  clients.push(res);
+
+  // Jeśli klient zamknie przeglądarkę lub przerwie połączenie – usuwamy `res` z listy
+  req.on('close', () => {
+    clients = clients.filter(r => r !== res);
+  });
 });
 
-
-// ─── MINI "Baza" banerów ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// MINI "Baza" banerów ─────────────────────────────────────────────
 const ADS = {
   'Szczecin': [
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48911223344' }
   ],
   'Bydgoszcz': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48500111222' }
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+48500111222' }
   ],
   'OTHER': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '515490145' }
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
   ]
 };
 
@@ -226,7 +254,7 @@ const ADS = {
 // Zwraca listę banerów [{img, href}] albo []
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  // 0) Globalny wyłącznik
+  // 0) Globalny wyłącznik reklam
   if (process.env.ADS_ENABLED !== 'true') {
     return res.json([]);
   }
@@ -236,7 +264,7 @@ app.get('/ads', (req, res) => {
 
   // 2) Jeśli nie podano w URL → użyj GeoIP (po IP klienta)
   if (!city) {
-    // Jeśli jest load-balancer → header X-Forwarded-For ma rzeczywiste IP
+    // Jeżeli jest load‐balancer → header X-Forwarded-For ma rzeczywiste IP
     const ipHeader = req.headers['x-forwarded-for'] || req.ip || '';
     const ip = ipHeader.split(',')[0].trim();
     const geo = geoip.lookup(ip);
@@ -256,9 +284,9 @@ app.get('/ads', (req, res) => {
   return res.json(adsList);
 });
 
-
-
-// 2) GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
@@ -272,8 +300,11 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
-
-///////////Dla  admina co moze a co nie moze///////
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /admin/device/:serial/params – zapis nowych parametrów (walidacja kluczy)
+// Ten endpoint dostępny tylko dla admina (adminOnly).
+// Dodano walidację trigger_dist jako boolean.
+// ─────────────────────────────────────────────────────────────────────────────
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   const { serial } = req.params;
   const body = req.body;
@@ -343,8 +374,9 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   }
 });
 
-
-// 3) POST /login — logowanie
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /login — logowanie
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -402,8 +434,9 @@ app.post('/login', async (req, res) => {
   return res.json({ token });
 });
 
-
-// 4) POST /forgot-password — generuje nowe hasło, zapisuje w bazie i wysyła e-mail
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /forgot-password — generuje nowe hasło, zapisuje w bazie i wysyła e-mail
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -455,8 +488,9 @@ app.post('/forgot-password', async (req, res) => {
   }
 });
 
-
-// 5) POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   const { email, password, role='client', name='', company='' } = req.body;
   console.log(`➕ [POST /admin/create-user] Tworzę usera: ${email}`);
@@ -469,13 +503,17 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   res.send('User created');
 });
 
-// 6) GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/me/devices', auth, async (req, res) => {
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });
 
-// 7) PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
+// ─────────────────────────────────────────────────────────────────────────────
+// PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
+// ─────────────────────────────────────────────────────────────────────────────
 app.put('/device/:id/phone', auth, async (req, res) => {
   const phone = normalisePhone(req.body.phone);
   if (!phone) return res.status(400).send('Invalid phone');
@@ -487,7 +525,9 @@ app.put('/device/:id/phone', auth, async (req, res) => {
   res.send('Updated');
 });
 
-// 8) DELETE /admin/user/:email — usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /admin/user/:email — usuwa użytkownika wraz z urządzeniami (ON DELETE CASCADE)
+// ─────────────────────────────────────────────────────────────────────────────
 app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   const email = req.params.email.toLowerCase();
   console.log(`🗑️ [DELETE /admin/user/${email}] Próba usunięcia usera`);
@@ -508,7 +548,9 @@ app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   }
 });
 
-// 9) POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
   try {
     const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
@@ -560,7 +602,9 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
   }
 });
 
-// ── FIXED /uplink ENDPOINT (dodano znacznik ts do params + email alert) ────
+// ─────────────────────────────────────────────────────────────────────────────
+// /uplink: odbiór pomiaru z ChirpStack → zapis do bazy + e-mail/SMS + SSE
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/uplink', async (req, res) => {
   try {
     /* 1) devEUI ---------------------------------------------------------- */
@@ -634,14 +678,13 @@ app.post('/uplink', async (req, res) => {
     const { rows: [row] } = await db.query(q, [d.id, distance, JSON.stringify(varsToSave)]);
 
     // --- jeśli czujnik znowu wysłał pomiar – kasujemy znacznik „72 h alert wysłany”
-if (row.stale_alert_sent) {
-  await db.query(
-    'UPDATE devices SET stale_alert_sent = FALSE WHERE id = $1',
-    [d.id]
-  );
-  console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
-}
-
+    if (row.stale_alert_sent) {
+      await db.query(
+        'UPDATE devices SET stale_alert_sent = FALSE WHERE id = $1',
+        [d.id]
+      );
+      console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
+    }
 
     /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
     if (d.old_flag && !row.new_flag) {
@@ -678,7 +721,7 @@ if (row.stale_alert_sent) {
         console.log(`📲 [POST /uplink] Wysyłam SMS na: ${toNumbers.join(', ')}`);
         let usedSms = 0;
         for (const num of toNumbers) {
-          if (row.sms_limit - usedSms <= 0) break; // nie ma już limitu
+          if (row.sms_limit - usedSms <= 0) break;
           try {
             await sendSMS(num, msg);
             usedSms++;
@@ -732,6 +775,14 @@ if (row.stale_alert_sent) {
       }
     }
 
+    /** ◾️ TU wypychamy SSE do wszystkich podłączonych: */
+    sendEvent({
+      serial: devEui,
+      distance,
+      voltage,
+      ts: varsToSave.ts
+    });
+
     return res.send('OK');
   } catch (err) {
     console.error('❌ Error in /uplink:', err);
@@ -781,7 +832,7 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     'tel_do_szambiarza',
     'alert_email',
     'red_cm',
-     'street',
+    'street',
     'sms_limit'
     // Dodaj tu kolejne, jeśli rozszerzysz model (np. 'empty_cm' itd.)
   ]);
@@ -826,7 +877,6 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     return res.status(500).send('Błąd serwera');
   }
 });
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

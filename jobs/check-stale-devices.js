@@ -2,7 +2,7 @@
 
 /**
  * Ten skrypt:
- *   - Łączy się do bazy Postgres przez Pool (z użyciem `DATABASE_URL`)
+ *   - Łączy się do bazy Postgres przez Pool (zmienna środowiskowa DATABASE_URL)
  *   - Szuka urządzeń, które nie wysłały pomiaru od HRS godzin i nie miały jeszcze alertu
  *   - Wysyła SMS i/lub e-mail, oznacza w bazie, że alert poszedł
  */
@@ -13,6 +13,7 @@ require('dotenv').config();
 
 const HRS = 1; // próg braku odpowiedzi (w godzinach)
 
+// — pomocnicze funkcje do SMS i e-mail
 function normalisePhone(p) {
   if (!p || p.length < 9) return null;
   return p.startsWith('+48') ? p : '+48' + p;
@@ -40,14 +41,19 @@ async function sendEmail(to, subj, html) {
 }
 
 ;(async () => {
-  // 1) Inicjalizujemy Pool wewnątrz async (żeby mieć pewność, że dotenv został wywołany)
+  // ---------- DEBUG: Czy na pewno mamy DATABASE_URL? ----------
+  console.log('DEBUG → DATABASE_URL =', process.env.DATABASE_URL);
+
+  // Inicjalizujemy połączenie do bazy tak, jak w decrement-abonament.js
   const db = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // dokładnie tak, jak w decrement-abonament.js – jeśli Twoja baza wymaga SSL
+    // Jeśli Twoja baza wymaga SSL – odkomentuj poniższe. 
+    // Jeśli nie, zostaw to zakomentowane (bo niektóre bazy na Render akceptują połączenie bez SSL).
+    // ssl: { rejectUnauthorized: false }
   });
 
   try {
-    // 2) Pobierz wiersze z urządzeniami, które nie miały pomiaru od > HRS godzin
+    // 1) Pobierz wiersze z urządzeniami, które nie miały pomiaru od > HRS godzin
     const q = `
       SELECT
         id,
@@ -106,17 +112,14 @@ async function sendEmail(to, subj, html) {
         }
       }
 
-      // ––– Oznaczamy, że alert został wysłany — by nie wysyłać ponownie –––
-      await db.query(
-        'UPDATE devices SET stale_alert_sent = TRUE WHERE id = $1',
-        [d.id]
-      );
+      // ––– Oznaczamy, że alert został wysłany –––
+      await db.query('UPDATE devices SET stale_alert_sent = TRUE WHERE id = $1', [d.id]);
       console.log(`✅ Alert wysłany dla ${d.serial_number}`);
     }
   } catch (err) {
     console.error('❌ Błąd w check-stale-devices:', err);
   } finally {
-    // 3) Zamykamy połączenie
+    // 2) Zamknij połączenie do bazy
     await db.end();
   }
 })();

@@ -29,6 +29,7 @@ const db = new Pool({ connectionString: process.env.DATABASE_URL });
 const MIGRATION = `
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+--────────────────────────  USERS  ────────────────────────
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+--────────────────────────  DEVICES  ──────────────────────
 CREATE TABLE IF NOT EXISTS devices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -50,17 +52,61 @@ CREATE TABLE IF NOT EXISTS devices (
   tel_do_szambiarza TEXT,
   street TEXT,
   sms_limit INT  DEFAULT 30,
-  red_cm INT    DEFAULT 30,
+  red_cm   INT  DEFAULT 30,
   empty_cm INT  DEFAULT 150,
   empty_ts TIMESTAMPTZ,
   distance_cm INT,
   trigger_dist BOOLEAN DEFAULT false,
-  params JSONB  DEFAULT '{}',
+  params JSONB  DEFAULT '{}' ,
   abonament_expiry DATE,
   alert_email TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+--────────────────────────  SMS_ORDERS  ───────────────────
+--  Historia zakupów pakietów SMS (30 × SMS / 50 zł brutto)
+CREATE TABLE IF NOT EXISTS sms_orders (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id     UUID REFERENCES devices(id) ON DELETE CASCADE,
+  serial_number TEXT NOT NULL,
+  amount        NUMERIC(10,2) NOT NULL DEFAULT 50.00, -- cena brutto
+  status        TEXT NOT NULL DEFAULT 'new',          -- new / paid / error
+  redirect_url  TEXT,                                 -- link do Przelewy24
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  paid_at       TIMESTAMPTZ
+);
+
+-- Szybsze wyszukiwanie historii płatności danego urządzenia
+CREATE INDEX IF NOT EXISTS idx_sms_orders_serial
+  ON sms_orders(serial_number);
+
+--────────────────────────  TRIGGER  ──────────────────────
+-- Jeśli status zmieni się na 'paid' →:
+--   • sms_limit = 30
+--   • abonament_expiry += 365 dni
+--   • paid_at = teraz
+CREATE OR REPLACE FUNCTION sms_order_after_paid() RETURNS trigger AS $$
+BEGIN
+  IF NEW.status = 'paid' AND OLD.status <> 'paid' THEN
+    UPDATE devices
+      SET sms_limit        = 30,
+          abonament_expiry = COALESCE(abonament_expiry, CURRENT_DATE)
+                             + INTERVAL '365 days'
+      WHERE id = NEW.device_id;
+
+    NEW.paid_at := now();  -- zapisz datę opłacenia
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_sms_order_after_paid ON sms_orders;
+CREATE TRIGGER trg_sms_order_after_paid
+AFTER UPDATE ON sms_orders
+FOR EACH ROW
+EXECUTE FUNCTION sms_order_after_paid();
 `;
+
 (async () => {
   try {
     await db.query(MIGRATION);
@@ -69,6 +115,7 @@ CREATE TABLE IF NOT EXISTS devices (
     console.error('❌ Migration error:', e);
   }
 })();
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SMTP KONFIGURACJA (nodemailer)

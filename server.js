@@ -941,6 +941,6 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
   }
 });
 const smsPayments = require('./payments/sms');
-smsPayments(app, db);   // po utworzeniu express() i auth middleware
+smsPayments(app, db, auth);  // po utworzeniu express() i auth middleware
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

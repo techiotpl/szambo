@@ -20,7 +20,8 @@ module.exports = function registerSmsPayments(app, db) {
    *     Body: { serial }
    *     Auth: Bearer <JWT>
    *──────────────────────────────────────────────────────────*/
-  app.post('/sms/orders', async (req, res) => {
+ app.post('/sms/orders', auth, async (req, res) => {
+
     try {
       const { serial } = req.body;
       const user = req.user;                       // przychodzi z middleware auth

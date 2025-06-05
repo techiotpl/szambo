@@ -14,6 +14,9 @@ const crypto     = require('crypto'); // do losowania nowego hasła
 const geoip      = require('geoip-lite');
 require('dotenv').config();
 
+const smsPayments = require('./payments/sms');
+smsPayments(app, db);   // po utworzeniu express() i auth middleware
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';

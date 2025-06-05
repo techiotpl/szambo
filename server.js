@@ -14,8 +14,7 @@ const crypto     = require('crypto'); // do losowania nowego hasła
 const geoip      = require('geoip-lite');
 require('dotenv').config();
 
-const smsPayments = require('./payments/sms');
-smsPayments(app, db);   // po utworzeniu express() i auth middleware
+
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -941,6 +940,7 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     return res.status(500).send('Błąd serwera');
   }
 });
-
+const smsPayments = require('./payments/sms');
+smsPayments(app, db);   // po utworzeniu express() i auth middleware
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

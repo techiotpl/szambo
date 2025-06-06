@@ -10,6 +10,7 @@
 //   • db   : Pool (PostgreSQL)
 //   • auth : middleware autoryzujący (funkcja auth(req, res, next))
 
+const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
@@ -121,7 +122,7 @@ module.exports = (app, db, auth) => {
         country: 'PL',
         language: 'pl',
         // tu zwracamy już HTTPS-owy URL do /sms/verify
-        urlReturn: `https://api.tago.io/file/64482e832567a60008e515fa/icons/dziekuje.html`,
+        urlReturn: `https://www.techiot.pl/`,
         urlStatus: `https://${req.get('host')}/sms/verify`,
         timeLimit: 20,
         encoding: 'UTF-8',
@@ -174,25 +175,21 @@ module.exports = (app, db, auth) => {
   // ─────────────────────────────────────────────────────────────────────────────
   // POST /sms/verify
   //  – Przelewy24 przekieruje tu (POST) po zakończonej płatności
-  //  – Zamiast ręcznie weryfikować p24_sign, wykonujemy /transaction/verify
+  //  – Zamiast ręcznie weryfikować p24_sign, wywołujemy /transaction/verify
   //    u Przelewy24, żeby mieć pewność, że transakcja jest OPŁACONA.
   //  – Jeśli P24 odpowie statusem 'TRUE', dopiero wtedy aktualizujemy bazę.
   // ─────────────────────────────────────────────────────────────────────────────
   app.post(
     '/sms/verify',
-    // Express nie był importowany w sms.js – używamy więc już istniejącej instancji `app`
-    // i musimy tylko dodać body-parser, żeby mieć dostęp do req.body.
-    require('express').urlencoded({ extended: false }),
+    express.urlencoded({ extended: false }),
     async (req, res) => {
       try {
-        // 1) Odebrane parametry z P24 (w POST): p24_merchantId, p24_posId, p24_sessionId, p24_orderId, p24_amount, p24_currency, p24_sign, itd.
-        //    My wyciągamy te, których potrzebujemy: sessionId i orderId.
-        const {
-          p24_sessionId,
-          p24_orderId,
-          p24_amount,
-          p24_currency
-        } = req.body;
+        // 1) Odebrane parametry z P24 (w POST). Spróbujmy pobrać zarówno wersję z "p24_...",
+        //    jak i bez prefixu (bo czasem P24 wysyła w jednej lub drugiej formie).
+        const p24_sessionId = req.body.p24_sessionId ?? req.body.sessionId;
+        const p24_orderId   = req.body.p24_orderId   ?? req.body.orderId;
+        const p24_amount    = req.body.p24_amount    ?? req.body.amount;
+        const p24_currency  = req.body.p24_currency  ?? req.body.currency;
 
         console.log('▶️ [sms/verify] Otrzymane parametry P24 (POST):', {
           p24_sessionId,
@@ -232,9 +229,8 @@ module.exports = (app, db, auth) => {
           headers: { 'Content-Type': 'application/json' }
         });
 
-        // 3) Wywołujemy /transaction/verify, żeby upewnić się, że płatność doszła do skutku
-        //    Potrzebny jest "sign" do /transaction/verify: 
-        //    wg dokumentacji: signVerify = SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
+        // 3) Utwórz 'sign' do /transaction/verify, wg dokumentacji:
+        //    signVerify = SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
         const dataToHash = `${merchantId}|${p24_sessionId}|${p24_orderId}|${p24_amount}|${p24_currency}|${crcKey}`;
         const verifySign = calculateSHA384(dataToHash);
         console.log('▶️ [sms/verify] verify dataToHash =', dataToHash);
@@ -252,10 +248,10 @@ module.exports = (app, db, auth) => {
             sign:       verifySign
           });
           console.log('▶️ [sms/verify] odpowiedź z /transaction/verify:', verifyResp.data);
+
           if (
             verifyResp.data &&
             verifyResp.data.data &&
-            // zależnie od wersji API: czasami status to 'TRUE' albo 'true'
             String(verifyResp.data.data.status).toUpperCase() === 'TRUE'
           ) {
             verificationOk = true;
@@ -288,7 +284,7 @@ module.exports = (app, db, auth) => {
         );
         console.log('▶️ [sms/verify] Zaktualizowano devices dla deviceId =', deviceId);
 
-        // 5) Zwracamy użytkownikowi stronę potwierdzenia lub przekierowujemy
+        // 5) Zwracamy użytkownikowi stronę potwierdzenia lub go przekierowujemy:
         return res.send(`
           <html><body style="font-family:sans-serif;text-align:center;margin-top:50px;">
             <h2>Płatność zakończona pomyślnie 😊</h2>

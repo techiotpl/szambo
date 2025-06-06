@@ -17,7 +17,6 @@ require('dotenv').config();
 // ─────────────────────────────────────────────────────────────────────────────
 // MAPOWANIE KODÓW REGION → NAZWA WOJEWÓDZTWA (geoip-lite używa kodów ISO 3166-2)
 // ─────────────────────────────────────────────────────────────────────────────
-// Przykładowe kody dla Polski (sprawdź pełną listę w dokumentacji geoip-lite)
 const _regionMapPL = {
   '02': 'Dolnośląskie',
   '04': 'Kujawsko-Pomorskie',
@@ -37,11 +36,6 @@ const _regionMapPL = {
   '32': 'Zachodniopomorskie',
 };
 
-
-
-
-
-
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
@@ -50,7 +44,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DATABASE
+// DATABASE (migration i inicjalizacja poola)
 // ─────────────────────────────────────────────────────────────────────────────
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -144,7 +138,6 @@ EXECUTE FUNCTION sms_order_after_paid();
   }
 })();
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SMTP KONFIGURACJA (nodemailer)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,17 +174,10 @@ transporter.verify((error, success) => {
   }
 });
 
-/**
- * Wysyła e-mail przez SMTP (nodemailer).
- * - `to` może być stringiem (pojedynczy email) lub tablicą stringów.
- * - `subj` to temat wiadomości (string).
- * - `html` to zawartość wiadomości w formacie HTML (string).
- */
 async function sendEmail(to, subj, html) {
   if (!transporter) {
     throw new Error('SMTP transporter nie jest skonfigurowany');
   }
-
   const recipients = Array.isArray(to) ? to.join(', ') : to;
   const mailOptions = {
     from: smtpFrom,
@@ -199,7 +185,6 @@ async function sendEmail(to, subj, html) {
     subject: subj,
     html: html
   };
-
   console.log(`✉️ Próbuję wysłać e-maila do: ${recipients} (temat: "${subj}")`);
   const info = await transporter.sendMail(mailOptions);
   console.log('✅ Wysłano e-mail przez SMTP:', info.messageId);
@@ -264,7 +249,6 @@ function adminOnly(req, res, next) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DODANA TRASA: GET /admin/users-with-devices (auth + adminOnly)
-// Wcześniej jej brakowało – potrzebna panelowi HTML do wyświetlenia listy.
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
@@ -277,18 +261,37 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   res.json(rows);
 });
 
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // Poniżej dodajemy prosty broker SSE:
+// 
+// * KLIENCI → trzymamy array odpowiedzi `res`
+// * Wysyłamy event: uplink, data: {...} do wszystkich podłączonych
+// 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Przechowujemy w tej tablicy obiekty `res` dla wszystkich obecnie podłączonych klientów SSE
 let clients = [];
+
+/**
+ * Usuwa zamknięte odpowiedzi i wypisuje do logów ilość aktywnych klientów
+ */
+function pruneClients() {
+  clients = clients.filter(r => !r.writableEnded && !r.finished);
+  console.log(`ℹ️ Aktywnych klientów SSE: ${clients.length}`);
+}
 
 /**
  * Wysyła zdarzenie SSE do wszystkich podłączonych klientów.
  * `payload` to dowolny JS‐owy obiekt, np. { serial, distance, voltage, ts }.
  */
 function sendEvent(payload) {
+  pruneClients();
+
+  if (clients.length === 0) {
+    console.log('ℹ️ Brak podłączonych klientów SSE – pomijam wysyłkę');
+    return;
+  }
+
   const dataAsJson = JSON.stringify(payload);
   const msg = [
     'event: uplink',
@@ -297,10 +300,14 @@ function sendEvent(payload) {
     ''
   ].join('\n');
 
-  // Iterujemy po wszystkich zapisanych `res` i wypisujemy wiadomość SSE
   clients.forEach(res => {
-    res.write(msg);
+    try {
+      res.write(msg);
+    } catch (err) {
+      console.warn('⚠️ Błąd podczas pisania do klienta SSE – usuwam go:', err.message);
+    }
   });
+  console.log(`▶️ Wyemitowano SSE uplink → ${dataAsJson}`);
 }
 
 /**
@@ -308,20 +315,26 @@ function sendEvent(payload) {
  * Utrzymuje otwarte połączenie HTTP jako text/event-stream. Każdy nowy /uplink wypchnie event.
  */
 app.get('/events', (req, res) => {
-  // Ustawiamy nagłówki wymagane przez SSE
+  // 1) Ustawiamy nagłówki wymagane przez SSE
   res.set({
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive'
   });
   res.flushHeaders();
 
-  // Dodajemy to `res` do listy aktywnych klientów
-  clients.push(res);
+  // 2) Wyślij od razu „komentarz” (heartbeat), żeby połączenie się uaktywniło w przeglądarce
+  //    i żeby proxy/go-between nie ściąło tego połączenia jako „nieużywane”.
+  res.write(': ping\n\n');
 
-  // Jeśli klient zamknie przeglądarkę lub przerwie połączenie – usuwamy `res` z listy
+  // 3) Dodajemy to `res` do listy aktywnych klientów
+  clients.push(res);
+  console.log('➕ Nowy klient SSE podłączony, wszystkich:', clients.length);
+
+  // 4) Jeśli klient zamknie połączenie – usuwamy `res` z listy
   req.on('close', () => {
     clients = clients.filter(r => r !== res);
+    console.log('➖ Klient SSE rozłączony, pozostało:', clients.length);
   });
 });
 
@@ -344,7 +357,6 @@ const ADS = {
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '997' }
   ],
 
-
   'OTHER': [
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
   ]
@@ -355,46 +367,27 @@ const ADS = {
 // Zwraca listę banerów [{img, href}] albo zawsze conajmniej ADS['OTHER']
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  // 0) Globalny wyłącznik reklam
   if (process.env.ADS_ENABLED !== 'true') {
     return res.json([]);
   }
-
-  // 1) Spróbuj wziąć miasto z query stringa (do testów lub debugowania)
   let city = (req.query.city || '').trim();
-
-  // 2) Jeśli nie podano w URL → użyj GeoIP (po IP klienta)
   if (!city) {
-    // Jeżeli jest load‐balancer → header X-Forwarded-For ma rzeczywiste IP
     const ipHeader = req.headers['x-forwarded-for'] || req.ip || '';
     const ip = ipHeader.split(',')[0].trim();
     const geo = geoip.lookup(ip);
     if (geo) {
-      // jeżeli jest nazwa miasta, weź ją
       if (geo.city) {
         city = geo.city;
-      }
-      // jeżeli nie ma miasta, a to Polska, spróbuj przetłumaczyć region → województwo
-      else if (geo.country === 'PL' && geo.region) {
+      } else if (geo.country === 'PL' && geo.region) {
         const regionName = _regionMapPL[geo.region];
-        if (regionName) {
-          city = regionName;
-        }
+        if (regionName) city = regionName;
       }
     }
   }
-
-  // 3) Normalizacja: pierwsza litera duża, reszta małe (żeby pasowało do kluczy w ADS)
   if (city) {
     city = city[0].toUpperCase() + city.slice(1).toLowerCase();
   }
-
-  // 4) Pobierz reklamy:
-  //    - najpierw po mieście
-  //    - potem (jeśli wybraliśmy województwo), bo może ktoś dodał klucz do ADS
-  //    - w ostateczności fallback do ADS['OTHER']
   const adsList = ADS[city] || ADS['OTHER'];
-
   return res.json(adsList);
 });
 
@@ -421,8 +414,6 @@ app.get('/device/:serial/params', auth, async (req, res) => {
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   const { serial } = req.params;
   const body = req.body;
-
-  // ◾️ Lista dozwolonych pól dla admina (w tym trigger_dist jako BOOLEAN)
   const allowedFields = new Set([
     'phone',
     'phone2',
@@ -433,20 +424,16 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'abonament_expiry',
     'sms_limit',
     'alert_email',
-    'trigger_dist'  // tutaj jako rzeczywisty boolean
+    'trigger_dist'
   ]);
-
   const cols = [];
   const vals = [];
   let i = 1;
-
   for (const [k, v] of Object.entries(body)) {
     if (!allowedFields.has(k)) {
       console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-
-    // ◾️ Walidacja poszczególnych kluczy:
     if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
       return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
     }
@@ -460,21 +447,17 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
       return res.status(400).send('Niepoprawny email');
     }
     if (k === 'trigger_dist') {
-      // Teraz v musi być prawdziwym booleanem, a nie np. 0 albo 1
       if (typeof v !== 'boolean') {
         return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
       }
     }
-
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
-
   if (!cols.length) {
     console.log(`❌ [PATCH /admin/device/${serial}/params] Brak danych do zaktualizowania`);
     return res.status(400).send('Brak danych do aktualizacji');
   }
-
   vals.push(serial);
   const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
   try {
@@ -492,8 +475,6 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
-
-  // ▪ Podstawowa walidacja inputu:
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     console.log(`❌ [POST /login] Niepoprawny email: ${email}`);
     return res.status(400).send('Niepoprawny email');
@@ -502,7 +483,6 @@ app.post('/login', async (req, res) => {
     console.log(`❌ [POST /login] Za krótkie hasło dla: ${email}`);
     return res.status(400).send('Hasło musi mieć minimum 6 znaków');
   }
-
   console.log(`🔑 [POST /login] próba logowania użytkownika: ${email}`);
   let rows;
   try {
@@ -511,13 +491,11 @@ app.post('/login', async (req, res) => {
     console.error(`❌ [POST /login] Błąd bazy przy pobieraniu usera:`, err);
     return res.status(500).send('Błąd serwera');
   }
-
   const u = rows[0];
   if (!u) {
     console.log(`❌ [POST /login] Brak usera: ${email}`);
     return res.status(401).send('Niepoprawne dane logowania');
   }
-
   let passwordMatches;
   try {
     passwordMatches = await bcrypt.compare(password, u.password_hash);
@@ -525,15 +503,12 @@ app.post('/login', async (req, res) => {
     console.error(`❌ [POST /login] Błąd bcrypt dla: ${email}`, err);
     return res.status(500).send('Błąd serwera');
   }
-
   if (!passwordMatches) {
     console.log(`❌ [POST /login] Złe hasło dla usera: ${email}`);
     return res.status(401).send('Niepoprawne dane logowania');
   }
-
   let token;
   try {
-    // ▪ Bez parametru expiresIn → token ważny do zmiany JWT_SECRET
     token = jwt.sign(
       { id: u.id, email: u.email, role: u.role },
       JWT_SECRET
@@ -542,7 +517,6 @@ app.post('/login', async (req, res) => {
     console.error(`❌ [POST /login] Błąd przy generowaniu tokenu dla: ${email}`, err);
     return res.status(500).send('Błąd serwera');
   }
-
   console.log(`✅ [POST /login] Poprawne logowanie: ${email}`);
   return res.json({ token });
 });
@@ -553,33 +527,23 @@ app.post('/login', async (req, res) => {
 app.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
-
-    // ▪ Walidacja: sprawdź, czy email jest stringiem i zawiera '@'
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       console.log('❌ [POST /forgot-password] Niepoprawny email:', email);
       return res.status(400).send('Niepoprawny email');
     }
-
     console.log(`🔄 [POST /forgot-password] Prośba o reset hasła dla: ${email}`);
     const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
     if (!rows.length) {
       console.log(`⚠️ [POST /forgot-password] Nie znaleziono usera o e-mailu: ${email}`);
-      // Zwracamy 200 nawet jeśli nie ma konta (żeby nie ujawniać, kto jest w bazie)
       return res
         .status(200)
         .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
     }
-
-    // Generowanie i hashowanie nowego hasła
     const newPassword = crypto.randomBytes(4).toString('hex');
     console.log(`🔑 [POST /forgot-password] Wygenerowane hasło dla ${email}: ${newPassword}`);
     const newHash = await bcrypt.hash(newPassword, 10);
-
-    // Zapis nowego hasha do bazy
     await db.query('UPDATE users SET password_hash = $1 WHERE email = $2', [newHash, email.toLowerCase()]);
     console.log(`✅ [POST /forgot-password] Zaktualizowano hasło w bazie dla ${email}`);
-
-    // Wysyłka e-maila
     const htmlContent = `
       <p>Cześć,</p>
       <p>Na Twoją prośbę wygenerowaliśmy nowe hasło do konta TechioT.</p>
@@ -590,7 +554,6 @@ app.post('/forgot-password', async (req, res) => {
     console.log(`✉️ [POST /forgot-password] Wysyłam maila do ${email}`);
     await sendEmail(email.toLowerCase(), 'Twoje nowe hasło – TechioT', htmlContent);
     console.log(`✅ [POST /forgot-password] Mail z nowym hasłem wysłany do ${email}`);
-
     return res
       .status(200)
       .send('Jeśli konto o podanym adresie istnieje, otrzymasz nowe hasło mailem.');
@@ -936,8 +899,6 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
 app.patch('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
-
-  // ▪ Ustal listę dozwolonych pól
   const allowedFields = new Set([
     'phone',
     'phone2',
@@ -946,19 +907,15 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     'red_cm',
     'street',
     'sms_limit'
-    // Dodaj tu kolejne, jeśli rozszerzysz model (np. 'empty_cm' itd.)
   ]);
-
   const cols = [];
   const vals = [];
   let i = 1;
-
   for (const [k, v] of Object.entries(body)) {
     if (!allowedFields.has(k)) {
       console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-    // Dodatkowa walidacja np. dla 'phone' – poniżej przykład minimalny:
     if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
       return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
     }
@@ -968,17 +925,14 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
       }
     }
-
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
-
   if (!cols.length) {
     console.log(`❌ [PATCH /device/${serial}/params] Brak danych do zaktualizowania`);
     return res.status(400).send('Brak danych do aktualizacji');
   }
-
-  vals.push(serial); // ostatni parametr do WHERE
+  vals.push(serial);
   const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
   try {
     await db.query(q, vals);
@@ -989,7 +943,12 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     return res.status(500).send('Błąd serwera');
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOKLEJAMY SMS PAYMENTS → po utworzeniu express() i auth middleware
+// ─────────────────────────────────────────────────────────────────────────────
 const smsPayments = require('./payments/sms');
-smsPayments(app, db, auth);  // po utworzeniu express() i auth middleware
+smsPayments(app, db, auth);  // rejestruje /sms/orders i /sms/verify
+
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

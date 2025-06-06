@@ -64,7 +64,7 @@ module.exports = (app, db, auth) => {
 
       // 4) Przygotuj parametry transakcji:
       //    • Cena pakietu: 50 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
-      const amountPLN = 50;             // w złotych
+      const amountPLN = 1;             // w złotych
       const amount    = amountPLN * 100; // w groszach
       const currency  = 'PLN';
       // Unikalne sessionId: SMS_<deviceId>_<timestamp>
@@ -121,7 +121,7 @@ module.exports = (app, db, auth) => {
         country: 'PL',
         language: 'pl',
         // tu zwracamy już HTTPS-owy URL do /sms/verify
-        urlReturn: `https://www.techiot.pl/`,
+        urlReturn: `https://api.tago.io/file/64482e832567a60008e515fa/icons/dziekuje.html`,
         urlStatus: `https://${req.get('host')}/sms/verify`,
         timeLimit: 20,
         encoding: 'UTF-8',

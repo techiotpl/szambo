@@ -125,7 +125,7 @@ module.exports = (app, db, auth) => {
         email: req.user.email || '',  // jeśli w tokenie masz email
         country: 'PL',
         language: 'pl',
-        urlReturn: `https://www.techiot.pl/`,                 // przekierowanie front-endowe
+        urlReturn: `https://api.tago.io/file/64482e832567a60008e515fa/icons/dziekuje.html`,                 // przekierowanie front-endowe
         urlStatus: `https://${req.get('host')}/sms/verify`,   // callback po HTTPS
         timeLimit: 20,
         encoding: 'UTF-8',
@@ -352,7 +352,7 @@ module.exports = (app, db, auth) => {
             <body style="font-family:sans-serif; text-align:center; margin-top:50px;">
               <h2>Płatność zakończona pomyślnie 😊</h2>
               <p>Pakiet 30 SMS przypisany do Twojego urządzenia.</p>
-              <a href="https://www.techiot.pl/">Wróć do aplikacji</a>
+              <a href="https://api.tago.io/file/64482e832567a60008e515fa/icons/dziekuje.html">Wróć do aplikacji</a>
             </body>
           </html>
         `);

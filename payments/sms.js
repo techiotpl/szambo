@@ -66,9 +66,8 @@ module.exports = (app, db, auth) => {
       console.log('▶️ [sms/orders] Znalezione device =', device);
 
       // 4) Przygotuj parametry transakcji:
-      //    • Cena pakietu: 50 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
-      //      (tutaj dla testu ustawiamy 1 zł = 100 groszy; w produkcji: 50 zł = 5000 groszy)
-      const amountPLN = 1;           
+      //    • Cena pakietu: 1 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
+      const amountPLN = 1;
       const amount    = amountPLN * 100; // w groszach
       const currency  = 'PLN';
       // Unikalne sessionId: SMS_<deviceId>_<timestamp>
@@ -192,16 +191,15 @@ module.exports = (app, db, auth) => {
     bodyParser.urlencoded({ extended: false }),
     async (req, res) => {
       try {
-        // 1) Odbierz parametry z x-www-form-urlencoded
-        //    W Przelewy24 nazwy przychodzą z prefiksem „p24_”:
+        // 1) Odbierz parametry z x-www-form-urlencoded (zgodnie z logami):
         const {
-          p24_merchant_id: p24_merchantId,
-          p24_pos_id:      p24_posId,
-          p24_session_id:  p24_sessionId,
-          p24_order_id:    p24_orderId,
-          p24_amount:      p24_amount,
-          p24_currency:    p24_currency,
-          p24_sign:        p24_sign
+          merchantId: p24_merchantId,
+          posId:      p24_posId,
+          sessionId:  p24_sessionId,
+          orderId:    p24_orderId,
+          amount:     p24_amount,
+          currency:   p24_currency,
+          sign:       p24_sign
         } = req.body;
 
         console.log('▶️ [sms/verify] Otrzymane parametry P24 (POST):', {
@@ -228,19 +226,21 @@ module.exports = (app, db, auth) => {
           return res.status(400).send('Brakuje parametrów');
         }
 
-        // 3) Pobierz z env: merchantId oraz crcKey
+        // 3) Pobierz z env: merchantId, posId, apiKey, crcKey
         const merchantIdEnv = process.env.P24_MERCHANT_ID?.trim();
         const posIdEnv      = process.env.P24_POS_ID?.trim();
-        const apiKeyEnv     = process.env.P24_API_KEY?.trim(); // na wypadek dalszej weryfikacji
+        const apiKeyEnv     = process.env.P24_API_KEY?.trim();
         const crcKey        = process.env.P24_CRC_KEY?.trim();
         const useSandbox    = (process.env.P24_SANDBOX || '').trim() === 'true';
 
-        if (!merchantIdEnv || !posIdEnv || !crcKey || !apiKeyEnv) {
-          console.warn('❌ [sms/verify] Brakuje P24_MERCHANT_ID, P24_POS_ID, P24_API_KEY lub P24_CRC_KEY w env');
+        if (!merchantIdEnv || !posIdEnv || !apiKeyEnv || !crcKey) {
+          console.warn(
+            '❌ [sms/verify] Brakuje P24_MERCHANT_ID, P24_POS_ID, P24_API_KEY lub P24_CRC_KEY w env'
+          );
           return res.status(500).send('Błąd konfiguracji');
         }
 
-        // 4) Zbuduj ciąg do SHA384 w dowiązku do dokumentacji:
+        // 4) Zbuduj ciąg do SHA384:
         //    signVerify = merchantId | posId | sessionId | orderId | amount | currency | crcKey
         const dataToHash = [
           merchantIdEnv,
@@ -262,7 +262,7 @@ module.exports = (app, db, auth) => {
           return res.status(400).send('Invalid signature');
         }
 
-        // 5) Wysłanie zapytania do   /transaction/verify   by ostatecznie upewnić się, że płatność jest opłacona
+        // 5) Wysłanie zapytania do /transaction/verify by ostatecznie upewnić się, że płatność jest opłacona
         const baseUrl = useSandbox
           ? 'https://sandbox.przelewy24.pl/api/v1'
           : 'https://secure.przelewy24.pl/api/v1';
@@ -291,7 +291,7 @@ module.exports = (app, db, auth) => {
 
         console.log('▶️ [sms/verify] Odpowiedź z /transaction/verify:', verifyResponse.data);
 
-        // 6) Sprawdź, czy P24 rzeczywiście potwierdziło(status: true)
+        // 6) Sprawdź, czy P24 rzeczywiście potwierdziło status: true
         if (!verifyResponse.data?.data?.status) {
           console.warn('⚠️ [sms/verify] Przelewy24 nie potwierdziło transakcji');
           return res.status(400).send('Transakcja nieznana lub nieudana');

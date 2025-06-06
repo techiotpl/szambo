@@ -179,7 +179,7 @@ module.exports = (app, db, auth) => {
   // POST /sms/verify
   //  – Przelewy24 wyśle tu callback metodą POST (application/x-www-form-urlencoded)
   //  – Weryfikujemy sygnaturę (p24_sign), przy pomocy JSON.stringify(…)
-  //  – Jeśli OK, wywołujemy /transaction/verify
+  //  – Jeśli OK, wywołujemy /transaction/verify (METODĄ PUT!)
   //  – Jeśli to też OK, aktualizujemy devices (sms_limit, abonament_expiry)
   // ─────────────────────────────────────────────────────────────────────────────
   app.post(
@@ -188,7 +188,7 @@ module.exports = (app, db, auth) => {
     async (req, res) => {
       try {
         //
-        // 1) Odbierz (właściwe) pola z req.body:
+        // 1) Odbierz właściwe pola z req.body:
         //
         const {
           merchantId,
@@ -250,7 +250,7 @@ module.exports = (app, db, auth) => {
         }
 
         //
-        // 4) Wyliczamy sign od P24–owej notyfikacji (z JSON, a nie z „|”):
+        // 4) Wyliczamy sign notyfikacji (z JSON, nie ’|’):
         //
         const notificationPayload = {
           merchantId:   Number(merchantIdEnv),
@@ -278,7 +278,7 @@ module.exports = (app, db, auth) => {
         }
 
         //
-        // 5) Skoro notyfikacja ma poprawny podpis, wywołujemy /transaction/verify:
+        // 5) Skoro notyfikacja ma poprawny podpis, wywołujemy /transaction/verify METODĄ PUT:
         //
         const baseUrl = useSandbox
           ? 'https://sandbox.przelewy24.pl/api/v1'
@@ -295,15 +295,15 @@ module.exports = (app, db, auth) => {
           }
         });
 
-        console.log('▶️ [sms/verify] Wysyłam POST do /transaction/verify …');
-        const verifyResp = await clientVerify.post('/transaction/verify', {
+        console.log('▶️ [sms/verify] Wysyłam PUT do /transaction/verify …');
+        const verifyResp = await clientVerify.put('/transaction/verify', {
           merchantId: Number(merchantIdEnv),
           posId:      Number(posIdEnv),
           sessionId:  sessionId,
           orderId:    Number(orderId),
           amount:     Number(amount),
           currency:   currency,
-          // Weryfikacyjny sign z JSON:
+          // Sign do weryfikacji:
           sign: calculateSHA384(
             JSON.stringify({
               sessionId: sessionId,
@@ -318,14 +318,14 @@ module.exports = (app, db, auth) => {
         console.log('▶️ [sms/verify] Odpowiedź z /transaction/verify:', verifyResp.data);
 
         const verifyStatus = verifyResp.data?.data?.status;
-        // Akceptujemy "TRUE" lub "success" lub boolean true
+        // Akceptujemy boolean true lub string "TRUE"/"success"
         if (!(verifyStatus === true || verifyStatus === 'TRUE' || verifyStatus === 'success')) {
           console.warn('⚠️ [sms/verify] P24 NIE potwierdziło transakcji');
           return res.status(400).send('Transakcja niepotwierdzona');
         }
 
         //
-        // 6) Jeżeli faktycznie P24 potwierdziło płatność, aktualizujemy bazę:
+        // 6) Jeżeli P24 faktycznie potwierdziło płatność, aktualizujemy bazę:
         //    sessionId = "SMS_<deviceId>_<ts>"
         //
         const parts = sessionId.split('_');

@@ -14,6 +14,32 @@ const crypto     = require('crypto'); // do losowania nowego hasła
 const geoip      = require('geoip-lite');
 require('dotenv').config();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MAPOWANIE KODÓW REGION → NAZWA WOJEWÓDZTWA (geoip-lite używa kodów ISO 3166-2)
+// ─────────────────────────────────────────────────────────────────────────────
+// Przykładowe kody dla Polski (sprawdź pełną listę w dokumentacji geoip-lite)
+const _regionMapPL = {
+  '02': 'Dolnośląskie',
+  '04': 'Kujawsko-Pomorskie',
+  '06': 'Lubelskie',
+  '08': 'Lubuskie',
+  '10': 'Łódzkie',
+  '12': 'Małopolskie',
+  '14': 'Mazowieckie',
+  '16': 'Opolskie',
+  '18': 'Podkarpackie',
+  '20': 'Podlaskie',
+  '22': 'Pomorskie',
+  '24': 'Śląskie',
+  '26': 'Świętokrzyskie',
+  '28': 'Warmińsko-Mazurskie',
+  '30': 'Wielkopolskie',
+  '32': 'Zachodniopomorskie',
+};
+
+
+
+
 
 
 const app  = express();
@@ -309,6 +335,16 @@ const ADS = {
   'Bydgoszcz': [
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+48500111222' }
   ],
+
+  // Przykładowe województwa (używane w fallbackie, gdy nie ma miasta)
+  'Kujawsko-Pomorskie': [
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: '515490145' }
+  ],
+  'Zachodniopomorskie': [
+    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '997' }
+  ],
+
+
   'OTHER': [
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
   ]
@@ -316,7 +352,7 @@ const ADS = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /ads?city=<opcjonalneMiasto>
-// Zwraca listę banerów [{img, href}] albo []
+// Zwraca listę banerów [{img, href}] albo zawsze conajmniej ADS['OTHER']
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
   // 0) Globalny wyłącznik reklam
@@ -333,8 +369,18 @@ app.get('/ads', (req, res) => {
     const ipHeader = req.headers['x-forwarded-for'] || req.ip || '';
     const ip = ipHeader.split(',')[0].trim();
     const geo = geoip.lookup(ip);
-    if (geo && geo.city) {
-      city = geo.city;
+    if (geo) {
+      // jeżeli jest nazwa miasta, weź ją
+      if (geo.city) {
+        city = geo.city;
+      }
+      // jeżeli nie ma miasta, a to Polska, spróbuj przetłumaczyć region → województwo
+      else if (geo.country === 'PL' && geo.region) {
+        const regionName = _regionMapPL[geo.region];
+        if (regionName) {
+          city = regionName;
+        }
+      }
     }
   }
 
@@ -343,8 +389,11 @@ app.get('/ads', (req, res) => {
     city = city[0].toUpperCase() + city.slice(1).toLowerCase();
   }
 
-  // 4) Pobierz reklamy dla danego miasta lub (jeśli nie ma wpisu) z klucza 'OTHER'
-  const adsList = ADS[city] || ADS['OTHER'] || [];
+  // 4) Pobierz reklamy:
+  //    - najpierw po mieście
+  //    - potem (jeśli wybraliśmy województwo), bo może ktoś dodał klucz do ADS
+  //    - w ostateczności fallback do ADS['OTHER']
+  const adsList = ADS[city] || ADS['OTHER'];
 
   return res.json(adsList);
 });

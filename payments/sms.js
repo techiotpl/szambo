@@ -67,7 +67,7 @@ module.exports = (app, db, auth) => {
 
       // 4) Przygotuj parametry transakcji:
       //    • Cena pakietu: 50 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
-      const amountPLN = 50;            // w złotych
+      const amountPLN = 3;            // w złotych
       const amount    = amountPLN * 100; // w groszach
       const currency  = 'PLN';
       // Unikalne sessionId: SMS_<deviceId>_<timestamp>

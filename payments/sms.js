@@ -71,17 +71,17 @@ module.exports = (app, db, auth) => {
       const sessionId = `SMS_${device.id}_${Date.now()}`;
       console.log('▶️ [sms/orders] sessionId =', sessionId);
 
-      // 5) Pobierz z .env niezbędne dane autoryzacyjne:
-      //    • P24_POS_ID      – numer POS (typu string lub liczba)
+      // 5) Pobierz z .env niezbędne dane autoryzacyjne i przytnij białe znaki:
+      //    • P24_POS_ID      – numer POS (jako string lub liczba)
       //    • P24_API_KEY     – API Key (hasło do Basic Auth)
       //    • P24_CRC_KEY     – klucz CRC (do SHA384)
       //    • P24_MERCHANT_ID – Twój MERCHANT ID w Panelu Przelewy24
       //    • P24_SANDBOX     – "true" → sandbox, inaczej produkcja
-      const posId      = process.env.P24_POS_ID;
-      const apiKey     = process.env.P24_API_KEY;
-      const crcKey     = process.env.P24_CRC_KEY;
-      const merchantId = process.env.P24_MERCHANT_ID;
-      const useSandbox = process.env.P24_SANDBOX === 'true';
+      const posId      = process.env.P24_POS_ID?.trim();
+      const apiKey     = process.env.P24_API_KEY?.trim();
+      const crcKey     = process.env.P24_CRC_KEY?.trim();
+      const merchantId = process.env.P24_MERCHANT_ID?.trim();
+      const useSandbox = (process.env.P24_SANDBOX || '').trim() === 'true';
 
       // Dodane logi, aby zweryfikować wartości z env:
       console.log('▶️ [sms/orders] process.env.P24_POS_ID      =', posId);
@@ -160,12 +160,6 @@ module.exports = (app, db, auth) => {
       console.log('▶️ [sms/orders] Finalny redirectUrl =', redirectUrl);
 
       // 11) (Opcjonalnie) W tym miejscu można dodać INSERT do tabeli sms_orders, by zachować historię.
-      //     np.:
-      //     await db.query(
-      //       `INSERT INTO sms_orders (device_id, serial_number, amount, status, redirect_url)
-      //               VALUES ($1, $2, $3, 'new', $4)`,
-      //       [device.id, serial, amountPLN, redirectUrl]
-      //     );
 
       // 12) Zwróć klientowi JSON z redirectUrl
       return res.json({ redirectUrl });
@@ -208,8 +202,8 @@ module.exports = (app, db, auth) => {
 
       // 2) Najpierw weryfikujemy poprawność p24_sign.
       //    wg dokumentacji: sign = SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
-      const merchantId = process.env.P24_MERCHANT_ID;
-      const crcKey     = process.env.P24_CRC_KEY;
+      const merchantId = process.env.P24_MERCHANT_ID?.trim();
+      const crcKey     = process.env.P24_CRC_KEY?.trim();
       if (!merchantId || !crcKey) {
         console.warn('❌ [sms/verify] Brakuje P24_MERCHANT_ID lub P24_CRC_KEY w env');
         return res.status(500).send('Brakuje P24_MERCHANT_ID lub P24_CRC_KEY');
@@ -248,17 +242,7 @@ module.exports = (app, db, auth) => {
         );
         console.log('▶️ [sms/verify] Zaktualizowano devices dla deviceId =', deviceId);
 
-        // 6) Możesz też zaktualizować tabelę sms_orders, np. SET status = 'paid', paid_at = now(). 
-        //    Jeśli utworzyłeś INSERT w kroku POST /sms/orders, tutaj wykonaj:
-        //      await db.query(
-        //        `UPDATE sms_orders
-        //           SET status = 'paid'
-        //         WHERE session_id = $1`,
-        //        [p24_sessionId]
-        //      );
-        //    (jeśli chcesz śledzić historię zakupów)
-
-        // 7) Wysyłamy prosty HTML z podziękowaniem lub przekierowanie
+        // 7) Wyślij prosty HTML z potwierdzeniem
         return res.send(`
           <html>
             <body style="font-family:sans-serif; text-align:center; margin-top:50px;">
@@ -269,7 +253,6 @@ module.exports = (app, db, auth) => {
           </html>
         `);
       } else {
-        // 8) Gdy p24_result != 'OK', to płatność nieudana
         console.warn('⚠️ [sms/verify] p24_result != OK:', p24_result);
         return res.send(`
           <html>

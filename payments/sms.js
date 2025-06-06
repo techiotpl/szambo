@@ -77,6 +77,14 @@ module.exports = (app, db, auth) => {
       const merchantId = process.env.P24_MERCHANT_ID;
       const useSandbox = process.env.P24_SANDBOX === 'true';
 
+      // <<< TUTAJ DODAĆ LOGI: >>>
+      console.log('>>>> P24_POS_ID     =', posId);
+      console.log('>>>> P24_API_KEY    =', apiKey ? '[ok]' : '[BRAK]');
+      console.log('>>>> P24_CRC_KEY    =', crcKey ? '[ok]' : '[BRAK]');
+      console.log('>>>> P24_MERCHANT_ID=', merchantId);
+      console.log('>>>> P24_SANDBOX    =', process.env.P24_SANDBOX);
+      
+
       if (!posId || !apiKey || !crcKey || !merchantId) {
         return res.status(500).json({ error: 'Brakuje zmiennych środowiskowych P24_*' });
       }

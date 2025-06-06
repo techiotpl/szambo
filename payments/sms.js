@@ -64,7 +64,7 @@ module.exports = (app, db, auth) => {
 
       // 4) Przygotuj parametry transakcji:
       //    • Cena pakietu: 50 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
-      const amountPLN = 50;           // w złotych
+      const amountPLN = 50;             // w złotych
       const amount    = amountPLN * 100; // w groszach
       const currency  = 'PLN';
       // Unikalne sessionId: SMS_<deviceId>_<timestamp>
@@ -112,19 +112,19 @@ module.exports = (app, db, auth) => {
       // 7) Przygotuj payload do rejestracji transakcji w Przelewy24
       const orderData = {
         merchantId: Number(merchantId),
-        posId: Number(posId),
-        sessionId: sessionId,
-        amount: amount,
-        currency: currency,
-        description: `Pakiet 30 SMS – urządzenie ${device.name}`,
-        email: req.user.email || '',  // jeśli w tokenie masz email
-        country: 'PL',
-        language: 'pl',
-        urlReturn: `${req.protocol}://${req.get('host')}/sms/verify`,
-        urlStatus: `${req.protocol}://${req.get('host')}/sms/verify`,
+        posId:      Number(posId),
+        sessionId:  sessionId,
+        amount:     amount,
+        currency:   currency,
+        description:`Pakiet 30 SMS – urządzenie ${device.name}`,
+        email:     req.user.email || '',  // jeśli w tokenie masz email
+        country:   'PL',
+        language:  'pl',
+        urlReturn: `https://${req.get('host')}/sms/verify`,
+        urlStatus: `https://${req.get('host')}/sms/verify`,
         timeLimit: 20,
-        encoding: 'UTF-8',
-        sign: sign
+        encoding:  'UTF-8',
+        sign:       sign
       };
 
       console.log('▶️ [sms/orders] orderData przed wysłaniem do P24 =', orderData);
@@ -170,123 +170,38 @@ module.exports = (app, db, auth) => {
   });
 
   //
-app.get('/sms/verify', async (req, res) => {
-  try {
-    // 1) Rozpakuj parametry otrzymane od P24 (przykładowo przez query string):
-    const {
-      p24_merchantId,
-      p24_posId,
-      p24_sessionId,
-      p24_orderId,
-      p24_amount,
-      p24_currency,
-      p24_result,
-      p24_sign
-    } = req.query;
-
-    // 2) Podstawowe sanity‐check: czy są wszystkie potrzebne pola?
-    if (!(p24_merchantId && p24_posId && p24_sessionId && p24_orderId &&
-          p24_amount && p24_currency && p24_result && p24_sign)) {
-      return res.status(400).send('Brakuje parametrów');
-    }
-
-    // 3) Weryfikuj sygnaturę P24:
-    const merchantId = process.env.P24_MERCHANT_ID;
-    const crcKey     = process.env.P24_CRC_KEY;
-    // wg dokumentacji:   SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
-    const dataToHash = `${merchantId}|${p24_sessionId}|${p24_orderId}|${p24_amount}|${p24_currency}|${crcKey}`;
-    const actualSign = crypto.createHash('sha384').update(dataToHash).digest('hex');
-    if (actualSign !== p24_sign) {
-      console.warn('⚠️ [SMS VERIFY] sign mismatch', { actualSign, p24_sign });
-      return res.status(400).send('Invalid signature');
-    }
-
-    // 4) Sprawdź, czy P24 zwróciło status OK:
-    if (p24_result !== 'OK') {
-      // Jeśli klient anulował płatność lub nie doszła do skutku...
-      return res.send(`
-        <html><body style="font-family:sans-serif;text-align:center;margin-top:50px;">
-          <h2>Płatność anulowana lub nieudana ❌</h2>
-          <p>Spróbuj ponownie lub skontaktuj się z obsługą.</p>
-          <a href="/">Wróć do aplikacji</a>
-        </body></html>
-      `);
-    }
-
-    // 5) (Opcjonalnie) Potwierdź jeszcze raz po stronie P24, że transakcja jest rzeczywiście opłacona:
-    //    – nie jest to absolutne "must", ale daje pełne bezpieczeństwo.
-    const useSandbox = (process.env.P24_SANDBOX === 'true');
-    const baseUrl = useSandbox
-      ? 'https://sandbox.przelewy24.pl/api/v1'
-      : 'https://secure.przelewy24.pl/api/v1';
-    const posId  = process.env.P24_POS_ID;
-    const apiKey = process.env.P24_API_KEY;
-    // przygotuj sygnaturę do `/transaction/verify`
-    const verifySignData = `${merchantId}|${p24_sessionId}|${p24_orderId}|${p24_amount}|${p24_currency}|${crcKey}`;
-    const verifySign = crypto.createHash('sha384').update(verifySignData).digest('hex');
-
-    const client = axios.create({
-      baseURL: baseUrl,
-      auth: {
-        username: posId.toString(),
-        password: apiKey
-      },
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    let verificationOk = false;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // GET /sms/verify
+  //  – Przelewy24 przekieruje tu po zakończonej płatności, z parametrami w query string
+  //  – Weryfikujemy sygnaturę (p24_sign), ewentualnie potwierdzamy transakcję
+  //  – Jeśli OK, oznaczamy transakcję jako zapłaconą i aktualizujemy devices:
+  //       • sms_limit = 30
+  //       • abonament_expiry += 365 dni
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.get('/sms/verify', async (req, res) => {
     try {
-      const verifyResp = await client.post('/transaction/verify', {
-        merchantId: Number(merchantId),
-        posId:      Number(posId),
-        sessionId:  p24_sessionId,
-        orderId:    Number(p24_orderId),
-        amount:     Number(p24_amount),
-        currency:   p24_currency,
-        sign:       verifySign
-      });
-      // w odpowiedzi spodziewamy się np. { data: { status: 'TRUE', … } }
-      if (verifyResp.data && verifyResp.data.data && verifyResp.data.data.status === 'TRUE') {
-        verificationOk = true;
+      // 1) Odebrane parametry z P24:
+      //    p24_merchantId, p24_posId, p24_sessionId, p24_orderId,
+      //    p24_amount, p24_currency, p24_result, p24_sign
+      const {
+        p24_merchantId,
+        p24_posId,
+        p24_sessionId,
+        p24_orderId,
+        p24_amount,
+        p24_currency,
+        p24_result,
+        p24_sign
+      } = req.query;
+
+      // 2) Podstawowe sanity‐check: czy są wszystkie potrzebne pola?
+      if (!(p24_merchantId && p24_posId && p24_sessionId && p24_orderId &&
+            p24_amount && p24_currency && p24_result && p24_sign)) {
+        return res.status(400).send('Brakuje parametrów');
       }
-    } catch (e) {
-      console.error('❌ [SMS VERIFY] Błąd w /transaction/verify:', e.response?.data || e.message);
-    }
 
-    if (!verificationOk) {
-      console.warn('⚠️ [SMS VERIFY] transakcja nieprzyjęta/zweryfikowana przez P24');
-      return res.status(400).send('Transakcja niezweryfikowana');
-    }
-
-    // 6) Wszystko OK → aktualizujemy bazę:
-    //    p24_sessionId ma format "SMS_<deviceId>_<timestamp>"
-    const parts = p24_sessionId.split('_');
-    const deviceId = parts[1]; // id urządzenia
-    await db.query(
-      `UPDATE devices
-          SET sms_limit = 30,
-              abonament_expiry = (CURRENT_DATE + INTERVAL '365 days')::date
-        WHERE id = $1`,
-      [deviceId]
-    );
-
-    // 7) Zwracamy użytkownikowi prostą stronę potwierdzenia:
-    return res.send(`
-      <html><body style="font-family:sans-serif;text-align:center;margin-top:50px;">
-        <h2>Płatność zakończona pomyślnie 😊</h2>
-        <p>Pakiet 30 SMS przypisany do Twojego urządzenia.</p>
-        <a href="/">Wróć do aplikacji</a>
-      </body></html>
-    `);
-  } catch (err) {
-    console.error('❌ [GET /sms/verify] Error:', err);
-    return res.status(500).send('Verification error');
-  }
-});
-
-
-      // 2) Najpierw weryfikujemy poprawność p24_sign.
-      //    wg dokumentacji: sign = SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
+      // 3) Weryfikuj sygnaturę P24:
+      //    wg dokumentacji: SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
       const merchantId = process.env.P24_MERCHANT_ID?.trim();
       const crcKey     = process.env.P24_CRC_KEY?.trim();
       if (!merchantId || !crcKey) {
@@ -299,56 +214,94 @@ app.get('/sms/verify', async (req, res) => {
 
       const actualSign = calculateSHA384(dataToHash);
       console.log('▶️ [sms/verify] Obliczone actualSign =', actualSign);
-      console.log('▶️ [sms/verify] Odebrane p24_sign =', p24_sign);
+      console.log('▶️ [sms/verify] Odebrane p24_sign   =', p24_sign);
 
       if (actualSign !== p24_sign) {
         console.warn('⚠️ [sms/verify] sign mismatch', { actualSign, p24_sign });
         return res.status(400).send('Invalid signature');
       }
 
-      // 3) Sprawdź status transakcji: p24_result === "OK" oznacza sukces
-      if (p24_result === 'OK') {
-        // 4) Wyciągnij deviceId z sessionId (format: "SMS_<deviceId>_<timestamp>")
-        const parts = (p24_sessionId || '').split('_');
-        if (parts.length < 2) {
-          console.warn('⚠️ [sms/verify] Nieprawidłowy p24_sessionId:', p24_sessionId);
-          return res.status(400).send('Invalid sessionId');
-        }
-        const deviceId = parts[1];
-        console.log('▶️ [sms/verify] Wyodrębniony deviceId =', deviceId);
-
-        // 5) Zaktualizuj devices: sms_limit = 30, abonament_expiry = teraz + 365 dni
-        await db.query(
-          `UPDATE devices
-              SET sms_limit = 30,
-                  abonament_expiry = (CURRENT_DATE + INTERVAL '365 days')::date
-            WHERE id = $1`,
-          [deviceId]
-        );
-        console.log('▶️ [sms/verify] Zaktualizowano devices dla deviceId =', deviceId);
-
-        // 7) Wyślij prosty HTML z potwierdzeniem
+      // 4) Sprawdź, czy P24 zwróciło status OK:
+      if (p24_result !== 'OK') {
+        // Jeśli klient anulował płatność lub nie doszła do skutku...
         return res.send(`
-          <html>
-            <body style="font-family:sans-serif; text-align:center; margin-top:50px;">
-              <h2>Płatność zakończona sukcesem &#128512;</h2>
-              <p>Pakiet 30 SMS został przypisany do Twojego urządzenia.</p>
-              <a href="/">Wróć do aplikacji</a>
-            </body>
-          </html>
-        `);
-      } else {
-        console.warn('⚠️ [sms/verify] p24_result != OK:', p24_result);
-        return res.send(`
-          <html>
-            <body style="font-family:sans-serif; text-align:center; margin-top:50px;">
-              <h2>Płatność nieudana &#10060;</h2>
-              <p>Pakiet SMS nie został przypisany.</p>
-              <a href="/">Wróć do aplikacji</a>
-            </body>
-          </html>
+          <html><body style="font-family:sans-serif;text-align:center;margin-top:50px;">
+            <h2>Płatność anulowana lub nieudana ❌</h2>
+            <p>Spróbuj ponownie lub skontaktuj się z obsługą.</p>
+            <a href="/">Wróć do aplikacji</a>
+          </body></html>
         `);
       }
+
+      // 5) (Opcjonalnie ale zalecane) Potwierdź jeszcze raz po stronie P24, że transakcja jest rzeczywiście opłacona:
+      const useSandbox = (process.env.P24_SANDBOX || '').trim() === 'true';
+      const baseUrl = useSandbox
+        ? 'https://sandbox.przelewy24.pl/api/v1'
+        : 'https://secure.przelewy24.pl/api/v1';
+      const posId  = process.env.P24_POS_ID;
+      const apiKey = process.env.P24_API_KEY;
+      // przygotuj sygnaturę do `/transaction/verify`
+      const verifySignData = `${merchantId}|${p24_sessionId}|${p24_orderId}|${p24_amount}|${p24_currency}|${crcKey}`;
+      const verifySign = calculateSHA384(verifySignData);
+
+      const client = axios.create({
+        baseURL: baseUrl,
+        auth: {
+          username: posId.toString(),
+          password: apiKey
+        },
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      let verificationOk = false;
+      try {
+        const verifyResp = await client.post('/transaction/verify', {
+          merchantId: Number(merchantId),
+          posId:      Number(posId),
+          sessionId:  p24_sessionId,
+          orderId:    Number(p24_orderId),
+          amount:     Number(p24_amount),
+          currency:   p24_currency,
+          sign:       verifySign
+        });
+        // w odpowiedzi spodziewamy się np. { data: { status: 'TRUE', … } }
+        if (verifyResp.data && verifyResp.data.data && verifyResp.data.data.status === 'TRUE') {
+          verificationOk = true;
+        }
+      } catch (e) {
+        console.error('❌ [sms/verify] Błąd w /transaction/verify:', e.response?.data || e.message);
+      }
+
+      if (!verificationOk) {
+        console.warn('⚠️ [sms/verify] transakcja niezweryfikowana przez P24');
+        return res.status(400).send('Transakcja niezweryfikowana');
+      }
+
+      // 6) Wszystko OK → aktualizujemy bazę:
+      //    p24_sessionId ma format "SMS_<deviceId>_<timestamp>"
+      const parts = p24_sessionId.split('_');
+      const deviceId = parts[1]; // id urządzenia
+      console.log('▶️ [sms/verify] Wyodrębniony deviceId =', deviceId);
+
+      await db.query(
+        `UPDATE devices
+            SET sms_limit = 30,
+                abonament_expiry = (CURRENT_DATE + INTERVAL '365 days')::date
+          WHERE id = $1`,
+        [deviceId]
+      );
+      console.log('▶️ [sms/verify] Zaktualizowano devices dla deviceId =', deviceId);
+
+      // 7) Wyślij użytkownikowi prosty HTML z potwierdzeniem:
+      return res.send(`
+        <html>
+          <body style="font-family:sans-serif; text-align:center; margin-top:50px;">
+            <h2>Płatność zakończona pomyślnie 😊</h2>
+            <p>Pakiet 30 SMS przypisany do Twojego urządzenia.</p>
+            <a href="/">Wróć do aplikacji</a>
+          </body>
+        </html>
+      `);
     } catch (err) {
       console.error('❌ [GET /sms/verify] Błąd:', err);
       return res.status(500).send('Verification error');

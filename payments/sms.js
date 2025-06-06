@@ -64,7 +64,7 @@ module.exports = (app, db, auth) => {
 
       // 4) Przygotuj parametry transakcji:
       //    • Cena pakietu: 50 zł brutto → Przelewy24 wymaga kwoty w groszach (x100)
-      const amountPLN = 5;           // w złotych
+      const amountPLN = 50;           // w złotych
       const amount    = amountPLN * 100; // w groszach
       const currency  = 'PLN';
       // Unikalne sessionId: SMS_<deviceId>_<timestamp>
@@ -191,17 +191,9 @@ module.exports = (app, db, auth) => {
 
       console.log('▶️ [sms/verify] Otrzymane parametry P24 (POST):', req.body);
 
-      // 2) Sprawdź, czy wszystkie potrzebne przyszły:
-      if (
-        !merchantId ||
-        !posId ||
-        !sessionId ||
-        !amount ||
-        !currency ||
-        !orderId ||
-        !sign
-      ) {
-        console.warn('⚠️ [sms/verify] Brakuje parametrów:', req.body);
+      // 2) Sprawdź, czy przynajmniej kluczowe parametry istnieją:
+      if (!sessionId || !amount || !currency || !orderId || !sign) {
+        console.warn('⚠️ [sms/verify] Brakuje wymaganych parametrów:', req.body);
         return res.status(400).send('Brakuje parametrów');
       }
 
@@ -214,7 +206,6 @@ module.exports = (app, db, auth) => {
         return res.status(500).send('Brakuje P24_MERCHANT_ID lub P24_CRC_KEY');
       }
 
-      // Upewnijmy się, że pól typu number/string używamy w tej samej kolejności i formacie:
       const dataToHash = `${cfgMerchantId}|${sessionId}|${orderId}|${amount}|${currency}|${cfgCrcKey}`;
       console.log('▶️ [sms/verify] dataToHash (do SHA384) =', dataToHash);
 
@@ -227,9 +218,8 @@ module.exports = (app, db, auth) => {
         return res.status(400).send('Invalid signature');
       }
 
-      // 4) W produkcji nie mamy już p24_result – zakładamy, że jeśli podpis się zgadza,
-      //    to płatność została zaksięgowana.
-      //    (Opcjonalnie: tutaj można jeszcze raz wywołać /transaction/verify, żeby mieć 100% pewność.)
+      // 4) Produkcyjny callback nie przesyła p24_result – jeśli podpis poprawny,
+      //    uznajemy, że płatność się powiodła (można też dodatkowo wywołać /transaction/verify).
 
       // 5) Wyciągnij deviceId z sessionId (format: "SMS_<deviceId>_<timestamp>")
       const parts = sessionId.split('_');

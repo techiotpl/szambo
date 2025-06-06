@@ -333,7 +333,7 @@ const ADS = {
     { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48911223344' }
   ],
   'Bydgoszcz': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+48500111222' }
+    { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+48500111222' }
   ],
 
   // Przykładowe województwa (używane w fallbackie, gdy nie ma miasta)

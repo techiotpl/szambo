@@ -173,10 +173,10 @@ module.exports = (app, db, auth) => {
   // ────────────────────────────────────────────────────────────────────────
   // POST /sms/verify
   //  – Przelewy24 w produkcji wywołuje TEN endpoint metodą POST (application/x-www-form-urlencoded),
-  //    przesyłając w body: { merchantId, posId, sessionId, amount, currency, orderId, sign, (…) }.
+  //    przesyłając w body: { merchantId, posId, sessionId, amount, originAmount, currency, orderId, methodId, statement, sign }.
   //  – Jeśli podpis się zgadza, uznajemy to za pomyślną płatność i ładujemy SMS.
   // ────────────────────────────────────────────────────────────────────────
-  app.post('/sms/verify', async (req, res) => {
+  app.post('/sms/verify', express.urlencoded({ extended: false }), async (req, res) => {
     try {
       // 1) Otrzymane od P24 pola (produkcja):
       const {
@@ -184,21 +184,24 @@ module.exports = (app, db, auth) => {
         posId,
         sessionId,
         amount,
+        originAmount,
         currency,
         orderId,
+        methodId,
+        statement,
         sign
       } = req.body;
 
       console.log('▶️ [sms/verify] Otrzymane parametry P24 (POST):', req.body);
 
       // 2) Sprawdź, czy przynajmniej kluczowe parametry istnieją:
-      if (!sessionId || !amount || !currency || !orderId || !sign) {
+      if (!sessionId || !amount || !originAmount || !currency || !orderId || !methodId || !statement || !sign) {
         console.warn('⚠️ [sms/verify] Brakuje wymaganych parametrów:', req.body);
         return res.status(400).send('Brakuje parametrów');
       }
 
       // 3) Weryfikuj sygnaturę:
-      //    Dokładnie wg formuły: SHA384( merchantId + "|" + sessionId + "|" + orderId + "|" + amount + "|" + currency + "|" + crcKey )
+      //    Dokładnie wg formuły: SHA384( merchantId + "|" + posId + "|" + sessionId + "|" + amount + "|" + originAmount + "|" + currency + "|" + orderId + "|" + methodId + "|" + statement + "|" + crcKey )
       const cfgMerchantId = process.env.P24_MERCHANT_ID?.trim();
       const cfgCrcKey     = process.env.P24_CRC_KEY?.trim();
       if (!cfgMerchantId || !cfgCrcKey) {
@@ -206,7 +209,7 @@ module.exports = (app, db, auth) => {
         return res.status(500).send('Brakuje P24_MERCHANT_ID lub P24_CRC_KEY');
       }
 
-      const dataToHash = `${cfgMerchantId}|${sessionId}|${orderId}|${amount}|${currency}|${cfgCrcKey}`;
+      const dataToHash = `${merchantId}|${posId}|${sessionId}|${amount}|${originAmount}|${currency}|${orderId}|${methodId}|${statement}|${cfgCrcKey}`;
       console.log('▶️ [sms/verify] dataToHash (do SHA384) =', dataToHash);
 
       const actualSign = calculateSHA384(dataToHash);
@@ -218,8 +221,7 @@ module.exports = (app, db, auth) => {
         return res.status(400).send('Invalid signature');
       }
 
-      // 4) Produkcyjny callback nie przesyła p24_result – jeśli podpis poprawny,
-      //    uznajemy, że płatność się powiodła (można też dodatkowo wywołać /transaction/verify).
+      // 4) Produkcyjny callback nie przesyła p24_result – jeśli podpis poprawny, uznajemy, że płatność się powiodła.
 
       // 5) Wyciągnij deviceId z sessionId (format: "SMS_<deviceId>_<timestamp>")
       const parts = sessionId.split('_');

@@ -547,11 +547,62 @@ app.post('/forgot-password', async (req, res) => {
     await db.query('UPDATE users SET password_hash = $1 WHERE email = $2', [newHash, email.toLowerCase()]);
     console.log(`✅ [POST /forgot-password] Zaktualizowano hasło w bazie dla ${email}`);
     const htmlContent = `
-      <p>Cześć,</p>
-      <p>Na Twoją prośbę wygenerowaliśmy nowe hasło do konta TechioT.</p>
-      <p><strong>Twoje nowe hasło:</strong> <code>${newPassword}</code></p>
-      <br>
-      <p>Pozdrawiamy,<br>TechioT</p>
+    <!-- 1. Reset hasła (/forgot-password) -->
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twoje nowe hasło – TechioT</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
+  <table role="presentation" style="width:100%; border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:20px 0;">
+        <table role="presentation" style="width:600px; border-collapse:collapse; background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+          <tr>
+            <td align="center" style="padding:20px;">
+              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
+                   alt="TechioT Logo" style="max-width:150px; height:auto;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
+              <h2 style="color:#333333; font-size:22px; margin:0;">
+                Wygenerowaliśmy nowe hasło
+              </h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px;">
+              <p style="color:#555555; font-size:16px; line-height:1.5;">
+                Cześć,<br>
+                na Twoją prośbę wygenerowaliśmy nowe hasło do aplikacji Szambo Control.
+              </p>
+              <p style="background-color:#f0f0f0; padding:15px; border-radius:5px; display:inline-block;">
+                <strong>Twoje nowe hasło:</strong><br>
+                <code style="font-size:18px; letter-spacing:1px;">${newPassword}</code>
+              </p>
+              <p style="color:#999999; font-size:12px; line-height:1.4; margin-top:30px;">
+                Ten e-mail został wygenerowany automatycznie, prosimy na niego nie odpowiadać.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
+              <p style="color:#777777; font-size:14px; margin:0;">
+                Pozdrawiamy,<br>
+                <strong>TechioT</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+
     `;
     console.log(`✉️ [POST /forgot-password] Wysyłam maila do ${email}`);
     await sendEmail(email.toLowerCase(), 'Twoje nowe hasło – TechioT', htmlContent);
@@ -660,11 +711,82 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
 
     // wysyłka e-mail & SMS
     console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
-    await sendEmail(
-      email.toLowerCase(),
-      '✅ Konto TechioT',
-      `Twoje konto jest gotowe.<br>Login: ${email}<br>Hasło: ${basePwd}`
-    );
+// 1) Przygotuj pełny szablon HTML
+const htmlContent = `
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twoje konto TechioT</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
+  <table role="presentation" style="width:100%; border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:20px 0;">
+        <table role="presentation" style="width:600px; border-collapse:collapse;
+              background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+          <tr>
+            <td align="center" style="padding:20px;">
+              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
+                   alt="TechioT Logo" style="max-width:150px; height:auto;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
+              <h2 style="color:#333333; font-size:24px; margin:0;">
+                Witamy w TechioT
+              </h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px;">
+              <p style="color:#555555; font-size:16px; line-height:1.5;">
+                Twoje konto zostało pomyślnie utworzone, a urządzenie dodane do systemu.
+              </p>
+              <table role="presentation" style="width:100%; margin:20px 0; border-collapse:collapse;">
+                <tr>
+                  <td style="padding:10px; background-color:#f0f0f0; border-radius:5px;">
+                    <strong>Login:</strong> ${email}<br>
+                    <strong>Hasło:</strong> ${basePwd}
+                  </td>
+                </tr>
+              </table>
+              <p style="color:#555555; font-size:16px; line-height:1.5;">
+                <strong>Pobierz lub otwórz aplikację TechioT:</strong><br>
+                <a href="intent://openApp#Intent;scheme=techiot;package=pl.techiot.szambocontrol;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dpl.techiot.szambocontrol;end"
+                   style="color:#1a73e8; text-decoration:none; font-size:16px;">
+                  Uruchom aplikację Szambo Control
+                </a>
+              </p>
+              <p style="color:#999999; font-size:12px; line-height:1.4; margin-top:30px;">
+                Ten e-mail został wygenerowany automatycznie, prosimy na niego nie odpowiadać.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
+              <p style="color:#777777; font-size:14px; margin:0;">
+                Zespół <strong>TechioT</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+
+// 2) Wyślij e-mail z użyciem nowego szablonu
+
+await sendEmail(
+  email.toLowerCase(),
+  '✅ Konto TechioT',
+  htmlContent
+);
+
     if (normalisePhone(phone)) {
       console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
       await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
@@ -835,11 +957,61 @@ app.post('/uplink', async (req, res) => {
         const mailTo = row.alert_email;
         const subj   = `⚠️ Poziom ${distance} cm przekroczył próg na ${devEui}`;
         const html   = `
-          <p>Cześć,</p>
-          <p>Uwaga! Urządzenie <strong>${devEui}</strong> przekroczyło próg alarmowy ${row.red_cm} cm:</p>
-          <p><strong>Aktualny poziom:</strong> ${distance} cm</p>
-          <br>
-          <p>Pozdrawiamy,<br>TechioT</p>
+      <!-- 3. Alert wysokiego poziomu cieczy (/uplink) -->
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alert: Wysoki poziom cieczy</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
+  <table role="presentation" style="width:100%; border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:20px 0;">
+        <table role="presentation" style="width:600px; border-collapse:collapse; background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+          <tr>
+            <td align="center" style="padding:20px;">
+              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
+                   alt="TechioT Logo" style="max-width:150px; height:auto;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
+              <h2 style="color:#c62828; font-size:24px; margin:0;">
+                ⚠️ Poziom cieczy przekroczył próg!
+              </h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px;">
+              <p style="color:#555555; font-size:16px; line-height:1.5;">
+                Poziom cieczy <strong>${distance} cm</strong>,
+                przekraczył ustawiony próg alarmowy <strong>${row.red_cm} cm</strong>.
+              </p>
+              <p style="color:#555555; font-size:16px; line-height:1.5;">
+                Prosimy o pilne opróżnienie zbiornika.
+              </p>
+              <p style="color:#999999; font-size:12px; line-height:1.4; margin-top:30px;">
+                Ta wiadomość została wysłana automatycznie, prosimy na nią nie odpowiadać.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
+              <p style="color:#777777; font-size:14px; margin:0;">
+                Pozdrawiamy,<br>
+                <strong>TechioT</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+
         `;
         console.log(`✉️ [POST /uplink] Wysyłam e-mail na: ${mailTo}`);
         try {

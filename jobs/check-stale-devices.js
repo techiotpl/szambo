@@ -11,7 +11,7 @@ const { Pool } = require('pg');
 const axios    = require('axios');
 require('dotenv').config();
 
-const HRS = 1; // próg braku odpowiedzi (w godzinach)
+const HRS = 72; // próg braku odpowiedzi (w godzinach)
 
 // — pomocnicze funkcje do SMS i e-mail
 function normalisePhone(p) {
@@ -77,11 +77,11 @@ async function sendEmail(to, subj, html) {
 
     console.log(`⚠️  Znaleziono ${rows.length} urządzeń bez pomiaru > ${HRS}h`);
     for (const d of rows) {
-      const msgTxt  = `⚠️ Czujnik ${d.serial_number} nie odpowiada od ponad ${HRS}h!`;
+      const msgTxt  = `⚠️ Czujnik w aplikacji Szambo Control nie odpowiada od ponad ${HRS}h!`;
       const mailSub = `⚠️ Czujnik ${d.serial_number} nie odpowiada`;
       const mailHtml = `
         <p>Cześć,</p>
-        <p>Urządzenie <strong>${d.serial_number}</strong> nie wysłało pomiaru od ponad ${HRS}&nbsp;godzin.</p>
+        <p>Twoje  urządzenie  nie wysłało pomiaru od ponad ${HRS}&nbsp;godzin.</p>
         <p>Prosimy zweryfikować jego działanie.</p><br><p>Pozdrawiamy<br>TechioT</p>
       `;
 

@@ -422,6 +422,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'street',
     'red_cm',
     'serial_number',
+    'capacity',
     'abonament_expiry',
     'sms_limit',
     'alert_email',
@@ -906,6 +907,7 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     'tel_do_szambiarza',
     'alert_email',
     'red_cm',
+    'capacity',
     'street',
     'sms_limit'
   ]);

@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS devices (
   sms_limit INT  DEFAULT 30,
   red_cm   INT  DEFAULT 30,
   empty_cm INT  DEFAULT 150,
+  capacity    INT  DEFAULT 8, 
   empty_ts TIMESTAMPTZ,
   distance_cm INT,
   trigger_dist BOOLEAN DEFAULT false,
@@ -397,7 +398,7 @@ app.get('/ads', (req, res) => {
 app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
-    SELECT phone, phone2, tel_do_szambiarza, alert_email,
+    SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
            red_cm, sms_limit,
            empty_cm, empty_ts, abonament_expiry
       FROM devices

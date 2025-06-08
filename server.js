@@ -845,7 +845,11 @@ app.post('/uplink', async (req, res) => {
       console.log(`ℹ️ [POST /uplink] Brak distance dla ${devEui}, pomijam`);
       return res.send('noop (no distance)');
     }
-
+/* >>> TU DODAJ NOWĄ LINIKĘ – zapisujemy odczyt do measurements <<< */
+await db.query(
+  'INSERT INTO measurements (device_serial, distance_cm) VALUES ($1, $2)',
+  [devEui, distance]
+);
     // dodajemy znacznik czasu ISO-8601
     const varsToSave = {
       distance,

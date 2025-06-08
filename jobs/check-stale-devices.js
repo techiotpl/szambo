@@ -18,7 +18,6 @@ function normalisePhone(p) {
   if (!p || p.length < 9) return null;
   return p.startsWith('+48') ? p : '+48' + p;
 }
-
 async function sendSMS(phone, msg) {
   const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
   if (!key || !pwd) return;
@@ -27,7 +26,6 @@ async function sendSMS(phone, msg) {
   )}&msg=${encodeURIComponent(msg)}`;
   await axios.post(url, null, { headers: { Accept: 'application/json' } });
 }
-
 const nodemailer = require('nodemailer');
 async function sendEmail(to, subj, html) {
   const mailer = nodemailer.createTransport({
@@ -41,32 +39,30 @@ async function sendEmail(to, subj, html) {
 }
 
 ;(async () => {
-  // ---------- DEBUG: Czy na pewno mamy DATABASE_URL? ----------
   console.log('DEBUG → DATABASE_URL =', process.env.DATABASE_URL);
 
-  // Inicjalizujemy połączenie do bazy tak, jak w decrement-abonament.js
   const db = new Pool({
     connectionString: process.env.DATABASE_URL,
-    // Jeśli Twoja baza wymaga SSL – odkomentuj poniższe. 
-    // Jeśli nie, zostaw to zakomentowane (bo niektóre bazy na Render akceptują połączenie bez SSL).
     // ssl: { rejectUnauthorized: false }
   });
 
   try {
-    // 1) Pobierz wiersze z urządzeniami, które nie miały pomiaru od > HRS godzin
+    // 1) Pobierz wiersze z urządzeniami:
+    //    - last_measurement_ts < teraz - HRS
+    //    - trigger_measurement = FALSE
     const q = `
       SELECT
         id,
         serial_number,
-        (params->>'ts')::timestamptz AS ts,
+        last_measurement_ts,
         phone,
         phone2,
         alert_email,
         sms_limit
       FROM devices
-      WHERE stale_alert_sent = FALSE
-        AND (params->>'ts') IS NOT NULL
-        AND (params->>'ts')::timestamptz < now() - interval '${HRS} hours'
+      WHERE trigger_measurement = FALSE
+        AND last_measurement_ts IS NOT NULL
+        AND last_measurement_ts < now() - interval '${HRS} hours'
     `;
     const { rows } = await db.query(q);
 
@@ -77,15 +73,16 @@ async function sendEmail(to, subj, html) {
 
     console.log(`⚠️  Znaleziono ${rows.length} urządzeń bez pomiaru > ${HRS}h`);
     for (const d of rows) {
-      const msgTxt  = `⚠️ Czujnik w aplikacji Szambo Control nie odpowiada od ponad ${HRS}h!`;
+      const msgTxt  = `⚠️ Czujnik ${d.serial_number} nie odpowiada od ponad ${HRS}h!`;
       const mailSub = `⚠️ Czujnik ${d.serial_number} nie odpowiada`;
       const mailHtml = `
         <p>Cześć,</p>
-        <p>Twoje  urządzenie  nie wysłało pomiaru od ponad ${HRS}&nbsp;godzin.</p>
-        <p>Prosimy zweryfikować jego działanie.</p><br><p>Pozdrawiamy<br>TechioT</p>
+        <p>Twoje urządzenie <strong>${d.serial_number}</strong> nie wysłało pomiaru od ponad ${HRS}&nbsp;godzin.</p>
+        <p>Prosimy zweryfikować jego działanie.</p>
+        <br><p>Pozdrawiamy<br>TechioT</p>
       `;
 
-      // ––– Wysyłka SMS –––
+      // — SMS —
       const nums = [normalisePhone(d.phone), normalisePhone(d.phone2)].filter(Boolean);
       for (const n of nums) {
         if (d.sms_limit > 0) {
@@ -100,10 +97,13 @@ async function sendEmail(to, subj, html) {
         }
       }
       if (nums.length) {
-        await db.query('UPDATE devices SET sms_limit = $1 WHERE id = $2', [d.sms_limit, d.id]);
+        await db.query(
+          'UPDATE devices SET sms_limit = $1 WHERE id = $2',
+          [d.sms_limit, d.id]
+        );
       }
 
-      // ––– Wysyłka e-mail –––
+      // — E-mail —
       if (d.alert_email) {
         try {
           await sendEmail(d.alert_email, mailSub, mailHtml);
@@ -112,14 +112,16 @@ async function sendEmail(to, subj, html) {
         }
       }
 
-      // ––– Oznaczamy, że alert został wysłany –––
-      await db.query('UPDATE devices SET stale_alert_sent = TRUE WHERE id = $1', [d.id]);
-      console.log(`✅ Alert wysłany dla ${d.serial_number}`);
+      // — Ustawiamy flagę, że już wysłaliśmy alert dla tego urządzenia —
+      await db.query(
+        'UPDATE devices SET trigger_measurement = TRUE WHERE id = $1',
+        [d.id]
+      );
+      console.log(`✅ Alert wysłany i trigger_measurement=TRUE dla ${d.serial_number}`);
     }
   } catch (err) {
     console.error('❌ Błąd w check-stale-devices:', err);
   } finally {
-    // 2) Zamknij połączenie do bazy
     await db.end();
   }
 })();

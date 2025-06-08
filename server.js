@@ -340,57 +340,90 @@ app.get('/events', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MINI "Baza" banerów
+// MINI "Baza" banerów  –  rozdzielenie na grupę A (premium) i B (standard)
 // ─────────────────────────────────────────────────────────────────────────────
 const ADS = {
-  'Szczecin': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+48911223344' }
-  ],
-  'Bydgoszcz': [
-    { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+48500111222' }
-  ],
+  // MIASTA ─────────────────────────────────────────────────
+  Szczecin: {
+    A: [
+      { img: 'https://example.com/szczecin_premium.jpg',
+        href: 'https://premium-firma.pl' }
+    ],
+    B: [
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
+        href: 'tel:+48911223344' }
+    ]
+  },
+  Bydgoszcz: {
+    A: [
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/fb_resized.png',
+        href: 'tel:+515490145' }
+    ],
+    B: [
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg',
+        href: 'tel:+663229464' }
+    ]
+  },
 
-  // Przykładowe województwa (używane w fallbackie, gdy nie ma miasta)
-  'Kujawsko-Pomorskie': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: '515490145' }
-  ],
-  'Zachodniopomorskie': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '997' }
-  ],
+  // WOJEWÓDZTWA (fallback gdy GeoIP nie zna miasta) ───────
+  'Kujawsko-Pomorskie': {
+    A: [],
+    B: [
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg',
+        href: '515490145' }
+    ]
+  },
+  'Zachodniopomorskie': {
+    A: [],
+    B: [
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
+        href: '997' }
+    ]
+  },
 
-  'OTHER': [
-    { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
-  ]
+  // DOMYŚLNY koszyk gdy nic nie pasuje ───────────────────
+  OTHER: {
+    A: [],
+    B: [
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
+        href: 'https://uniwersal-szambiarka.pl' }
+    ]
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /ads?city=<opcjonalneMiasto>
-// Zwraca listę banerów [{img, href}] albo zawsze conajmniej ADS['OTHER']
+// GET /ads?group=A|B&city=<opcjonalneMiasto>
+// Zwraca listę banerów z żądanej grupy (domyślnie „B”)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  if (process.env.ADS_ENABLED !== 'true') {
-    return res.json([]);
-  }
+  if (process.env.ADS_ENABLED !== 'true') return res.json([]);
+
+  /* 1) Grupa cenowa:  ’A’ – premium,  ’B’ – standard (domyślna) */
+  const group = req.query.group === 'A' ? 'A' : 'B';
+
+  /* 2) Ustal miasto / województwo – najpierw query-param, potem GeoIP */
   let city = (req.query.city || '').trim();
   if (!city) {
-    const ipHeader = req.headers['x-forwarded-for'] || req.ip || '';
-    const ip = ipHeader.split(',')[0].trim();
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '')
+                 .split(',')[0].trim();
     const geo = geoip.lookup(ip);
     if (geo) {
-      if (geo.city) {
-        city = geo.city;
-      } else if (geo.country === 'PL' && geo.region) {
-        const regionName = _regionMapPL[geo.region];
-        if (regionName) city = regionName;
-      }
+      city =
+        geo.city ||
+        (geo.country === 'PL' && _regionMapPL[geo.region]) ||
+        '';
     }
   }
-  if (city) {
+  if (city)
     city = city[0].toUpperCase() + city.slice(1).toLowerCase();
-  }
-  const adsList = ADS[city] || ADS['OTHER'];
-  return res.json(adsList);
+
+  /* 3) Wybierz odpowiedni koszyk; gdy brak w grupie A ⇒ fallback do B */
+  const bucket  = ADS[city] || ADS['OTHER'];
+  const banners = bucket[group].length ? bucket[group] : bucket['B'];
+
+  return res.json(banners);
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”

@@ -408,6 +408,19 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   res.json(rows[0]);
 });
 
+// GET /device/:serial/measurements – ostatnie ≤10 rekordów
+app.get('/device/:serial/measurements', auth, async (req, res) => {
+  const { serial } = req.params;
+  const q = `
+    SELECT distance_cm, ts
+      FROM measurements
+     WHERE device_serial = $1
+     ORDER BY ts DESC
+     LIMIT 10`;
+  const { rows } = await db.query(q, [serial]);
+  res.json(rows);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /admin/device/:serial/params – zapis nowych parametrów (walidacja kluczy)
 // Ten endpoint dostępny tylko dla admina (adminOnly).

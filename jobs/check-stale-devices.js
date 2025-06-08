@@ -11,7 +11,7 @@ const { Pool } = require('pg');
 const axios    = require('axios');
 require('dotenv').config();
 
-const HRS = 1; // próg braku odpowiedzi (w godzinach)
+const HRS = 72; // próg braku odpowiedzi (w godzinach)
 
 // — pomocnicze funkcje do SMS i e-mail
 function normalisePhone(p) {
@@ -73,14 +73,73 @@ async function sendEmail(to, subj, html) {
 
     console.log(`⚠️  Znaleziono ${rows.length} urządzeń bez pomiaru > ${HRS}h`);
     for (const d of rows) {
-      const msgTxt  = `⚠️ Czujnik ${d.serial_number} nie odpowiada od ponad ${HRS}h!`;
-      const mailSub = `⚠️ Czujnik ${d.serial_number} nie odpowiada`;
-      const mailHtml = `
-        <p>Cześć,</p>
-        <p>Twoje urządzenie <strong>${d.serial_number}</strong> nie wysłało pomiaru od ponad ${HRS}&nbsp;godzin.</p>
-        <p>Prosimy zweryfikować jego działanie.</p>
-        <br><p>Pozdrawiamy<br>TechioT</p>
-      `;
+      const msgTxt  = `⚠️ Czujnik do szamba nie odpowiada od ponad ${HRS}h! sprawdz antene  i czujnik`;
+      const mailSub = `⚠️ Czujnik szamba nie odpowiada`;
+  const mailHtml = `
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alert: Brak odpowiedzi z czujnika</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
+  <table role="presentation" style="width:100%; border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:20px 0;">
+        <table role="presentation" style="width:600px; border-collapse:collapse; background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding:20px;">
+              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
+                   alt="TechioT Logo"
+                   style="max-width:150px; height:auto;">
+            </td>
+          </tr>
+          <!-- Nagłówek -->
+          <tr>
+            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
+              <h2 style="color:#333333; font-size:24px; margin:0;">
+                ⚠️ Alert: Brak odpowiedzi z czujnika
+              </h2>
+            </td>
+          </tr>
+          <!-- Treść -->
+          <tr>
+            <td style="padding:20px;">
+              <p style="color:#555555; font-size:16px; line-height:1.5; margin-bottom:10px;">
+                Cześć,
+              </p>
+              <p style="color:#555555; font-size:16px; line-height:1.5; margin-bottom:10px;">
+                Twoje urządzenie <strong>${d.serial_number}</strong> nie wysłało pomiaru od ponad <strong>${HRS}&nbsp;godzin</strong>. Prosimy o:
+              </p>
+              <ul style="color:#555555; font-size:16px; line-height:1.5; margin:0 0 20px 20px; padding:0;">
+                <li style="margin-bottom:8px;">Sprawdzenie anteny</li>
+                <li style="margin-bottom:8px;">Weryfikację, czy urządzenie nie zostało uszkodzone przez firmę asenizacyjną</li>
+             
+              </ul>
+              <p style="color:#999999; font-size:12px; line-height:1.4; text-align:center; margin-top:30px;">
+                Ta wiadomość została wysłana automatycznie, prosimy na nią nie odpowiadać.
+              </p>
+            </td>
+          </tr>
+          <!-- Stopka -->
+          <tr>
+            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
+              <p style="color:#777777; font-size:14px; margin:0;">
+                Pozdrawiamy,<br>
+                <strong>TechioT</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+
 
       // — SMS —
       const nums = [normalisePhone(d.phone), normalisePhone(d.phone2)].filter(Boolean);

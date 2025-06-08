@@ -859,6 +859,7 @@ app.post('/uplink', async (req, res) => {
          SET params       = coalesce(params,'{}'::jsonb) || $3::jsonb,
              distance_cm  = $2::int,
              last_measurement_ts   = now(),
+             trigger_measurement   = FALSE,
              trigger_dist = CASE
                               WHEN $2::int <= red_cm THEN TRUE
                               WHEN $2::int >= red_cm THEN FALSE

@@ -356,7 +356,7 @@ const ADS = {
   },
   Bydgoszcz: {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/fb_resized.png',
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
         href: 'tel:+515490145' }
     ],
     B: [

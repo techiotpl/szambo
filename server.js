@@ -346,11 +346,11 @@ const ADS = {
   // MIASTA ─────────────────────────────────────────────────
   Szczecin: {
     A: [
-      { img: 'https://example.com/szczecin_premium.jpg',
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
         href: 'https://premium-firma.pl' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg',
         href: 'tel:+48911223344' }
     ]
   },

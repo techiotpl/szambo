@@ -938,6 +938,7 @@ await db.query(
     // dodajemy znacznik czasu ISO-8601
     const varsToSave = {
       distance,
+      snr,
       voltage,
       ts: new Date().toISOString()
     };

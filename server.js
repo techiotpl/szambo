@@ -923,15 +923,18 @@ app.post('/uplink', async (req, res) => {
     const obj      = req.body.object || {};
     const distance = obj.distance ?? null;  // cm
     const voltage  = obj.voltage  ?? null;  // V
+    /* 3a) radio parameters ---------------------------------------------- */
+const snr = req.body.rxInfo?.[0]?.snr ?? null;   // Helium-ChirpStack v4
     if (distance === null) {
       console.log(`ℹ️ [POST /uplink] Brak distance dla ${devEui}, pomijam`);
       return res.send('noop (no distance)');
     }
 /* >>> TU DODAJ NOWĄ LINIKĘ – zapisujemy odczyt do measurements <<< */
 await db.query(
-  'INSERT INTO measurements (device_serial, distance_cm) VALUES ($1, $2)',
-  [devEui, distance]
+  'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
+  [devEui, distance, snr]
 );
+
     // dodajemy znacznik czasu ISO-8601
     const varsToSave = {
       distance,
@@ -1117,6 +1120,7 @@ await db.query(
       serial: devEui,
       distance,
       voltage,
+      snr,
       ts: varsToSave.ts
     });
 

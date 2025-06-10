@@ -268,9 +268,10 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
 //------------------------------------------------------------
 
 app.get("/health", (req, res) => {
+  const time = new Date().toISOString();
+  console.log(`[PING] ${time} – /health ok oracle `);
   res.status(200).send("OK");
 });
-
 
 
 

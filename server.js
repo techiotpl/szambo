@@ -262,6 +262,19 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   res.json(rows);
 });
 
+
+//-------------------------------------------------------------
+//pingujemy server  hobby zeby nie padł 
+//------------------------------------------------------------
+
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
+
+
+
+
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // Poniżej dodajemy prosty broker SSE:

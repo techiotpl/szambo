@@ -990,7 +990,7 @@ await db.query(
         if (p2) toNumbers.push(p2);
       }
       if (toNumbers.length && row.sms_limit > 0) {
-        const msg = `⚠️ Poziom ${distance} cm przekroczył próg ${row.red_cm} cm`;
+        const msg = `⚠️ Poziom w zbiorniku wynosi ${distance} cm przekroczył wartosc  alarmowa ${row.red_cm} cm`;
         console.log(`📲 [POST /uplink] Wysyłam SMS na: ${toNumbers.join(', ')}`);
         let usedSms = 0;
         for (const num of toNumbers) {
@@ -1011,7 +1011,7 @@ await db.query(
       if (row.tel_do_szambiarza && row.sms_limit > 0) {
         const szam = normalisePhone(row.tel_do_szambiarza);
         if (szam) {
-          const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie. Tel: ${toNumbers[0] || 'brak'}`;
+          const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Prosze o oproznienie. Tel: ${toNumbers[0] || 'brak'}`;
           try {
             console.log(`📲 [POST /uplink] Wysyłam SMS do szambiarza: ${szam}`);
             await sendSMS(szam, msg2);

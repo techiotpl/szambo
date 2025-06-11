@@ -416,8 +416,10 @@ const ADS = {
   OTHER: {
     A: [
 
+            { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
+        href: 'tel:+515490145' },
        { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+7777777' }
+        href: 'tel:+515490145' }
       
     ],
     B: [

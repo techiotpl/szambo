@@ -1141,6 +1141,7 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
     SELECT
       (params ->> 'distance')::int      AS distance,
       (params ->> 'voltage')::numeric   AS voltage,
+      (params ->> 'snr')::numeric       AS snr,
       params ->> 'ts'                   AS ts,
       empty_cm,
       empty_ts,

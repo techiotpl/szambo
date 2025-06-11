@@ -373,9 +373,9 @@ const ADS = {
   Bydgoszcz: {
     A: [
       { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+515490145' },
+        href: 'tel:+51' },
        { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
+        href: 'tel:+52' }
     ],
     B: [
       { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg',
@@ -400,10 +400,10 @@ const ADS = {
   'Zachodniopomorskie': {
     A: [
 
-            { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+515490145' },
+            { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg',
+        href: 'tel:+1111' },
        { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
+        href: 'tel:+222222' }
       
     ],
     B: [
@@ -417,7 +417,7 @@ const ADS = {
     A: [
 
        { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
+        href: 'tel:+7777777' }
       
     ],
     B: [

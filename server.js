@@ -924,7 +924,8 @@ app.post('/uplink', async (req, res) => {
 
         // 2a) DND: w godzinach 23:00–06:00 nie wysyłamy alarmów
     const hour = new Date().getHours();
-    if (d.do_not_disturb && (hour >= 23 || hour < 17)) {
+ const hour = moment().tz('Europe/Warsaw').hour();      // ← lokalna godzina
+if (d.do_not_disturb && (hour >= 23 || hour < 17)) {    // ← poprawny zakres
       console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);
       // mimo to zapisujemy pomiar i pushe SSE:
       await db.query(
@@ -979,6 +980,7 @@ await db.query(
          phone, 
          phone2, 
          tel_do_szambiarza, 
+         do_not_disturb,
          street,
          stale_alert_sent,
          alert_email`;

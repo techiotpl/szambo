@@ -909,6 +909,7 @@ app.post('/uplink', async (req, res) => {
          street,
          red_cm, 
          trigger_dist AS old_flag, 
+         do_not_disturb
          sms_limit,
          alert_email
        FROM devices
@@ -919,7 +920,20 @@ app.post('/uplink', async (req, res) => {
       console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
       return res.status(404).send('Unknown device');
     }
-    const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email
+    const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email,d.do_not_disturb
+
+        // 2a) DND: w godzinach 23:00–06:00 nie wysyłamy alarmów
+    const hour = new Date().getHours();
+    if (d.do_not_disturb && (hour >= 23 || hour < 6)) {
+      console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);
+      // mimo to zapisujemy pomiar i pushe SSE:
+      await db.query(
+        'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
+        [devEui, distance, snr]
+      );
+      sendEvent({ serial: devEui, distance, voltage, snr, ts: new Date().toISOString() });
+      return res.send('OK (DND)');
+    }
 
     /* 3) payload --------------------------------------------------------- */
     const obj      = req.body.object || {};
@@ -1177,6 +1191,7 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
     'red_cm',
     'capacity',
     'street',
+    'do_not_disturb',
     'sms_limit'
   ]);
   const cols = [];

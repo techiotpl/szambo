@@ -909,7 +909,7 @@ app.post('/uplink', async (req, res) => {
          street,
          red_cm, 
          trigger_dist AS old_flag, 
-         do_not_disturb
+         do_not_disturb,
          sms_limit,
          alert_email
        FROM devices
@@ -920,14 +920,22 @@ app.post('/uplink', async (req, res) => {
       console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
       return res.status(404).send('Unknown device');
     }
-    const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email,d.do_not_disturb
 
-        // 2a) DND: w godzinach 23:00–06:00 nie wysyłamy alarmów
-   
- const hour = moment().tz('Europe/Warsaw').hour();      // ← lokalna godzina
-if (d.do_not_disturb && (hour >= 23 || hour < 17)) {    // ← poprawny zakres
+
+
+    const d = dev.rows[0];
+    /* 3) payload --------------------------------------------------------- */
+    
+    const obj      = req.body.object || {};
+    const distance = obj.distance ?? null;  // cm
+    const voltage  = obj.voltage  ?? null;  // V
+    /* 3a) radio parameters ---------------------------------------------- */
+const snr = req.body.rxInfo?.[0]?.snr ?? null;   // Helium-ChirpStack v4
+      /* 3b) DND – blokujemy wysyłkę 23:00-17:00 */
+    const hour = moment().tz('Europe/Warsaw').hour();     // lokalna godzina
+    const dnd  = d.do_not_disturb === true || d.do_not_disturb === 't';
+    if (dnd && (hour >= 23 || hour < 17)) {               // 17 = godzina testowa
       console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);
-      // mimo to zapisujemy pomiar i pushe SSE:
       await db.query(
         'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
         [devEui, distance, snr]
@@ -935,13 +943,6 @@ if (d.do_not_disturb && (hour >= 23 || hour < 17)) {    // ← poprawny zakres
       sendEvent({ serial: devEui, distance, voltage, snr, ts: new Date().toISOString() });
       return res.send('OK (DND)');
     }
-
-    /* 3) payload --------------------------------------------------------- */
-    const obj      = req.body.object || {};
-    const distance = obj.distance ?? null;  // cm
-    const voltage  = obj.voltage  ?? null;  // V
-    /* 3a) radio parameters ---------------------------------------------- */
-const snr = req.body.rxInfo?.[0]?.snr ?? null;   // Helium-ChirpStack v4
     if (distance === null) {
       console.log(`ℹ️ [POST /uplink] Brak distance dla ${devEui}, pomijam`);
       return res.send('noop (no distance)');

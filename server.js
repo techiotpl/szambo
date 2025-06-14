@@ -470,7 +470,7 @@ app.get('/device/:serial/params', auth, async (req, res) => {
   const { serial } = req.params;
   const q = `
     SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
-           red_cm, sms_limit,
+           red_cm, sms_limit,do_not_disturb,
            empty_cm, empty_ts, abonament_expiry
       FROM devices
      WHERE serial_number = $1`;

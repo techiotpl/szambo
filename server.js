@@ -937,9 +937,12 @@ const snr = req.body.rxInfo?.[0]?.snr ?? null;   // Helium-ChirpStack v4
     if (dnd && (hour >= 23 || hour < 17)) {               // 17 = godzina testowa
       console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);
       await db.query(
-        'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
-        [devEui, distance, snr]
-      );
++  if (distance !== null) {                      // ✔︎ zapisuj tylko gdy jest pomiar
++    await db.query(
++      'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
++      [devEui, distance, snr]
++    );
++  }
       sendEvent({ serial: devEui, distance, voltage, snr, ts: new Date().toISOString() });
       return res.send('OK (DND)');
     }

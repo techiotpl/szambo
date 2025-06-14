@@ -923,7 +923,7 @@ app.post('/uplink', async (req, res) => {
     const d = dev.rows[0];  // d.old_flag, d.sms_limit, d.alert_email,d.do_not_disturb
 
         // 2a) DND: w godzinach 23:00–06:00 nie wysyłamy alarmów
-    const hour = new Date().getHours();
+   
  const hour = moment().tz('Europe/Warsaw').hour();      // ← lokalna godzina
 if (d.do_not_disturb && (hour >= 23 || hour < 17)) {    // ← poprawny zakres
       console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);

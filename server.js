@@ -636,6 +636,48 @@ app.post('/login', authLimiter, async (req, res) => {
   return res.json({ token });
 });
 
+
+//////////////tu dodaje zmien hasło/////////////////////////
+
+// POST /change-password — zmiana hasła przez zalogowanego usera
+app.post('/change-password', auth, async (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  if (
+    !oldPassword || typeof oldPassword !== 'string' ||
+    !newPassword || typeof newPassword !== 'string' ||
+    newPassword.length < 6
+  ) {
+    return res.status(400).send('Niepoprawne dane');
+  }
+  try {
+    // 1) pobierz hasło użytkownika
+    const { rows } = await db.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (!rows.length) return res.status(404).send('Nie znaleziono użytkownika');
+
+    // 2) porównaj stare hasło
+    const ok = await bcrypt.compare(oldPassword, rows[0].password_hash);
+    if (!ok) return res.status(401).send('Niepoprawne stare hasło');
+
+    // 3) zahashuj nowe i zapisz
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      [ newHash, req.user.id ]
+    );
+
+    console.log(`✅ [POST /change-password] User ${req.user.email} changed password`);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Error in /change-password:', err);
+    return res.status(500).send('Błąd serwera');
+  }
+});
+///////////////////////////////////////////////////////////////////////////////////////////koniec  zmien hasłao////////////////////////
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /forgot-password — generuje nowe hasło, zapisuje w bazie i wysyła e-mail
 // ─────────────────────────────────────────────────────────────────────────────

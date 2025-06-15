@@ -54,6 +54,11 @@ const _regionMapPL = {
 };
 
 const app  = express();
+
+// Gdy aplikacja stoi za proxy (Render, Heroku, Nginx, Cloudflare…)
+// zaufaj 1. wpisowi z X-Forwarded-For, żeby req.ip pokazywało prawdziwy adres
+app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
 

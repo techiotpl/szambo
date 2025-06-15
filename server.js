@@ -6,6 +6,7 @@ const bodyParser = require('body-parser');
 const jwt        = require('jsonwebtoken');
 const bcrypt     = require('bcrypt');
 const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
 const axios      = require('axios');
 const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
@@ -13,6 +14,22 @@ const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
 const geoip      = require('geoip-lite');
 require('dotenv').config();
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,      // 15 min
+  max: 20,
+  standardHeaders: true,         // „RateLimit-*” w odpowiedzi
+  legacyHeaders: false,
+  message: 'Zbyt wiele prób logowania – spróbuj ponownie później.'
+});
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,      // 1 h
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Zbyt wiele resetów hasła – spróbuj ponownie za godzinę.'
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAPOWANIE KODÓW REGION → NAZWA WOJEWÓDZTWA (geoip-lite używa kodów ISO 3166-2)
@@ -559,7 +576,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /login — logowanie
 // ─────────────────────────────────────────────────────────────────────────────
-app.post('/login', async (req, res) => {
+app.post('/login', authLimiter, async (req, res) => { 
   const { email, password } = req.body;
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     console.log(`❌ [POST /login] Niepoprawny email: ${email}`);
@@ -610,7 +627,7 @@ app.post('/login', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /forgot-password — generuje nowe hasło, zapisuje w bazie i wysyła e-mail
 // ─────────────────────────────────────────────────────────────────────────────
-app.post('/forgot-password', async (req, res) => {
+app.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email || typeof email !== 'string' || !email.includes('@')) {

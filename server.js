@@ -17,7 +17,7 @@ require('dotenv').config();
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,      // 15 min
-  max: 2,
+  max: 5,
   standardHeaders: true,         // „RateLimit-*” w odpowiedzi
   legacyHeaders: false,
   message: 'Zbyt wiele prób logowania – spróbuj ponownie później.',
@@ -29,7 +29,7 @@ const authLimiter = rateLimit({
 
 const forgotPasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,      // 1 h
-  max: 2,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Zbyt wiele resetów hasła – spróbuj ponownie za godzinę.',

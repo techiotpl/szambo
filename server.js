@@ -33,6 +33,9 @@ const forgotPasswordLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Zbyt wiele resetów hasła – spróbuj ponownie za godzinę.',
+    // liczymy per-email; gdy brak – per IP
+  keyGenerator: req =>
+    (req.body?.email || req.ip || '').toLowerCase().trim()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

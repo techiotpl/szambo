@@ -186,7 +186,7 @@ CREATE TRIGGER trg_sms_order_after_paid
   AFTER UPDATE ON sms_orders
   FOR EACH ROW
   EXECUTE FUNCTION sms_order_after_paid();
-`;
+
 
 
 (async () => {

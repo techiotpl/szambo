@@ -1375,5 +1375,29 @@ app.patch('/device/:serial/params', auth, async (req, res) => {
 const smsPayments = require('./payments/sms');
 smsPayments(app, db, auth);  // rejestruje /sms/orders i /sms/verify
 
+
 // ─────────────────────────────────────────────────────────────────────────────
+
+// na samym dole, przed app.listen:
+app.get('/device/:serial/empties', auth, async (req, res) => {
+  const { serial } = req.params;
+  // najpierw znajdź device.id
+  const { rows: dev } = await db.query(
+    'SELECT id FROM devices WHERE serial_number = $1',
+    [serial]
+  );
+  if (!dev.length) return res.status(404).send('Device not found');
+  const deviceId = dev[0].id;
+  // potem zwróć historię opróżnień
+  const { rows } = await db.query(
+    `SELECT from_ts, removed_m3
+       FROM empties
+      WHERE device_id = $1
+      ORDER BY from_ts DESC`,
+    [deviceId]
+  );
+  res.json(rows);
+});
+
+
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

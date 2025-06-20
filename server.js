@@ -143,8 +143,28 @@ CREATE TABLE IF NOT EXISTS empties (
   from_ts       TIMESTAMPTZ,
   to_ts         TIMESTAMPTZ DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_empties_device_ts
-  ON empties(device_id, to_ts DESC);
+ALTER TABLE devices
+    ADD COLUMN IF NOT EXISTS last_removed_m3 NUMERIC(6,2);
+
+  -- zabezpieczenie triggerem zamiast CHECK z subquery
+  CREATE OR REPLACE FUNCTION check_removed_le_capacity()
+  RETURNS TRIGGER AS $$
+  DECLARE cap INT;
+  BEGIN
+    SELECT capacity INTO cap FROM devices WHERE id = NEW.device_id LIMIT 1;
+    IF NEW.removed_m3 > cap THEN
+      RAISE EXCEPTION 'removed_m3 (%) exceeds capacity (%)', NEW.removed_m3, cap;
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_check_removed_capacity ON empties;
+  CREATE TRIGGER trg_check_removed_capacity
+    BEFORE INSERT OR UPDATE ON empties
+    FOR EACH ROW
+    EXECUTE FUNCTION check_removed_le_capacity();
+`;
 
 --────────────────────────  TRIGGER SMS_ORDER  ────────────
 CREATE OR REPLACE FUNCTION sms_order_after_paid() RETURNS trigger AS $$

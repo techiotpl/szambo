@@ -21,6 +21,7 @@
     "jsonwebtoken": "^9.0.0",
     "moment-timezone": "^0.5.43",
     "nodemailer": "^7.0.3",
+    "helmet": "^7.0.0",
     "pg": "^8.11.2"
   },
   "devDependencies": {

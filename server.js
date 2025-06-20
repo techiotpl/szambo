@@ -1097,7 +1097,7 @@ if (d.old_flag && !row.new_flag) {
   // 2) oblicz ile m³ zostało opróżnione:
   //    removed_m3 = capacity * (1 - (prev_cm / empty_cm))
   const prevCm = d.distance_cm;
-  const emptyCm = d.empty_cm;
+  const emptyCm = distance;         // <-- TU bierzesz nowy odczyt
   const cap     = d.capacity;
   const removed = emptyCm > 0
     ? +(cap * (1 - (prevCm / emptyCm))).toFixed(2)

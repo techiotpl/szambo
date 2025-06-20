@@ -1005,10 +1005,10 @@ app.post('/uplink', async (req, res) => {
     const voltage  = obj.voltage  ?? null;  // V
     /* 3a) radio parameters ---------------------------------------------- */
 const snr = req.body.rxInfo?.[0]?.snr ?? null;   // Helium-ChirpStack v4
-      /* 3b) DND – blokujemy wysyłkę 23:00-17:00 */
+      /* 3b) DND – blokujemy wysyłkę 23:00-6:00 */
     const hour = moment().tz('Europe/Warsaw').hour();     // lokalna godzina
     const dnd  = d.do_not_disturb === true || d.do_not_disturb === 't';
-    if (dnd && (hour >= 23 || hour < 17)) {               // 17 = godzina testowa
+    if (dnd && (hour >= 23 || hour < 6)) {               // 6 = godzina testowa
       console.log(`🔕 [POST /uplink] DND active, skipping alerts for ${devEui}`);
     
   if (distance !== null) {                      // ✔︎ zapisuj tylko gdy jest pomiar

@@ -164,7 +164,7 @@ ALTER TABLE devices
     BEFORE INSERT OR UPDATE ON empties
     FOR EACH ROW
     EXECUTE FUNCTION check_removed_le_capacity();
-`;
+
 
 --────────────────────────  TRIGGER SMS_ORDER  ────────────
 CREATE OR REPLACE FUNCTION sms_order_after_paid() RETURNS trigger AS $$

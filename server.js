@@ -80,7 +80,7 @@ app.use(bodyParser.json());
 // ─────────────────────────────────────────────────────────────────────────────
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const MIGRATION = `
+const MIGRATION = String.raw`
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 --────────────────────────  USERS  ────────────────────────
@@ -186,7 +186,7 @@ CREATE TRIGGER trg_sms_order_after_paid
   AFTER UPDATE ON sms_orders
   FOR EACH ROW
   EXECUTE FUNCTION sms_order_after_paid();
-
+`; 
 
 
 (async () => {

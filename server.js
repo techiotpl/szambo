@@ -14,6 +14,8 @@ const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
 const geoip      = require('geoip-lite');
 require('dotenv').config();
+const helmet = require('helmet');
+
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,      // 15 min
@@ -61,6 +63,7 @@ const _regionMapPL = {
 };
 
 const app  = express();
+app.use(helmet());
 
 // Gdy aplikacja stoi za proxy (Render, Heroku, Nginx, Cloudflare…)
 // zaufaj 1. wpisowi z X-Forwarded-For, żeby req.ip pokazywało prawdziwy adres

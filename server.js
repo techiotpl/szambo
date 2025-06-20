@@ -980,23 +980,27 @@ app.post('/uplink', async (req, res) => {
       return res.status(400).send('dev_eui missing');
     }
 
-    /* 2) urządzenie w bazie --------------------------------------------- */
-    const dev = await db.query(
-      `SELECT 
-         id, 
-         phone, 
-         phone2, 
-         tel_do_szambiarza, 
-         street,
-         red_cm, 
-         trigger_dist AS old_flag, 
-         do_not_disturb,
-         sms_limit,
-         alert_email
-       FROM devices
-      WHERE serial_number = $1`,
-      [devEui]
-    );
+/* 2) urządzenie w bazie --------------------------------------------- */
+const dev = await db.query(
+  `SELECT 
+     id,
+     distance_cm,        -- poprzedni pomiar [cm]
+     empty_cm,           -- poziom „pustego” z params
+     capacity,           -- objętość zbiornika [m³]
+     phone, 
+     phone2, 
+     tel_do_szambiarza, 
+     street,
+     red_cm, 
+     trigger_dist AS old_flag, 
+     do_not_disturb,
+     sms_limit,
+     alert_email
+   FROM devices
+  WHERE serial_number = $1`,
+  [devEui]
+);
+
     if (!dev.rowCount) {
       console.log(`⚠️ [POST /uplink] Nieznane urządzenie: ${devEui}`);
       return res.status(404).send('Unknown device');
@@ -1080,14 +1084,42 @@ await db.query(
       console.log(`🔄  Flaga stale_alert_sent wyzerowana dla ${devEui}`);
     }
 
-    /* 4a) zapis empty_* przy opróżnieniu -------------------------------- */
-    if (d.old_flag && !row.new_flag) {
-      console.log(`⚡ [POST /uplink] Zapisuję empty_cm/empty_ts dla ${devEui}`);
-      await db.query(
-        'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
-        [distance, d.id]
-      );
-    }
+/* 4a) zapis empty_* przy opróżnieniu + log do empties + update last_removed_m3 */
+if (d.old_flag && !row.new_flag) {
+  console.log(`⚡ [POST /uplink] Detekcja opróżnienia dla ${devEui}`);
+
+  // 1) zaktualizuj devices.empty_cm oraz empty_ts
+  await db.query(
+    'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
+    [distance, d.id]
+  );
+
+  // 2) oblicz ile m³ zostało opróżnione:
+  //    removed_m3 = capacity * (1 - (prev_cm / empty_cm))
+  const prevCm = d.distance_cm;
+  const emptyCm = d.empty_cm;
+  const cap     = d.capacity;
+  const removed = emptyCm > 0
+    ? +(cap * (1 - (prevCm / emptyCm))).toFixed(2)
+    : 0;
+
+  // 3) wstaw wpis do tabeli empties
+  await db.query(
+    `INSERT INTO empties 
+       (device_id, prev_cm, empty_cm, removed_m3, from_ts) 
+     VALUES ($1,$2,$3,$4, now())`,
+    [d.id, prevCm, distance, removed]
+  );
+
+  // 4) zapisz ostatnie opróżnienie w devices.last_removed_m3
+  await db.query(
+    'UPDATE devices SET last_removed_m3 = $1 WHERE id = $2',
+    [removed, d.id]
+  );
+
+  console.log(`   → empties log: prev=${prevCm}cm, now=${distance}cm, removed=${removed}m³`);
+}
+
 
     /* 4b) logowanie wartości ------------------------------------------------ */
     const ref = row.red_cm;  // próg alarmu

@@ -493,44 +493,45 @@ const ADS = {
 // Zwraca listę banerów z żądanej grupy (domyślnie „B”)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  if (process.env.ADS_ENABLED !== 'true') return res.json([]);
+  if (process.env.ADS_ENABLED !== 'true') {
+    return res.json([]);
+  }
 
-  /* 1) Grupa cenowa:  ’A’ – premium,  ’B’ – standard (domyślna) */
+  // 1) Grupa cenowa: ’A’ – premium, ’B’ – standard (domyślna)
   const group = req.query.group === 'A' ? 'A' : 'B';
 
-  /* 2) Ustal miasto / województwo – najpierw query-param, potem GeoIP */
+  // 2) Ustal miasto / województwo – najpierw query-param, potem GeoIP
   let city = (req.query.city || '').trim();
-  if (!city) {
-    const ip = (req.headers['x-forwarded-for'] || req.ip || '')
-                 .split(',')[0].trim();
-    const geo = geoip.lookup(ip);
-    if (geo) {
-      city =
-        geo.city ||
-        (geo.country === 'PL' && _regionMapPL[geo.region]) ||
-        '';
-    }
-  }
-  if (city)
-    city = city[0].toUpperCase() + city.slice(1).toLowerCase();
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '')
+               .split(',')[0].trim();
+  const geo = geoip.lookup(ip);
 
-  /* 3) Wybierz odpowiedni koszyk; gdy brak w grupie A ⇒ fallback do B */
-  const bucket = ADS[city] || ADS['OTHER'];
+  if (!city && geo) {
+    city = geo.city ||
+           (geo.country === 'PL' && _regionMapPL[geo.region]) ||
+           '';
+  }
+  if (city) {
+    city = city[0].toUpperCase() + city.slice(1).toLowerCase();
+  }
+
+  // 3) Wybierz koszyk; gdy brak w grupie A → fallback do B
+  const bucket     = ADS[city]   || ADS['OTHER'];
   const rawBanners = bucket[group].length ? bucket[group] : bucket['B'];
 
-  // 4) Dodajemy każdemu bannerowi: id, city, region
+  // 4) Doklej każdemu bannerowi id, city, region
   const enriched = rawBanners.map((b, idx) => ({
-    id: `${city || 'OTHER'}-${group}-${idx}`,   // unikalne ID baneru
-    img: b.img,
-    href: b.href,
-    city: city || null,
-    region: geo && geo.country === 'PL' && geo.region
-      ? _regionMapPL[geo.region] || null
-      : null
+    id:     `${city || 'OTHER'}-${group}-${idx}`,
+    img:    b.img,
+    href:   b.href,
+    city:   city || null,
+    region: (geo && geo.country === 'PL' && _regionMapPL[geo.region])
+            ? _regionMapPL[geo.region]
+            : null
   }));
 
   return res.json(enriched);
-
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”

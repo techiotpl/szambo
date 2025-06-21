@@ -515,11 +515,21 @@ app.get('/ads', (req, res) => {
     city = city[0].toUpperCase() + city.slice(1).toLowerCase();
 
   /* 3) Wybierz odpowiedni koszyk; gdy brak w grupie A ⇒ fallback do B */
-  const bucket  = ADS[city] || ADS['OTHER'];
-  const banners = bucket[group].length ? bucket[group] : bucket['B'];
+  const bucket = ADS[city] || ADS['OTHER'];
+  const rawBanners = bucket[group].length ? bucket[group] : bucket['B'];
 
-  return res.json(banners);
-});
+  // 4) Dodajemy każdemu bannerowi: id, city, region
+  const enriched = rawBanners.map((b, idx) => ({
+    id: `${city || 'OTHER'}-${group}-${idx}`,   // unikalne ID baneru
+    img: b.img,
+    href: b.href,
+    city: city || null,
+    region: geo && geo.country === 'PL' && geo.region
+      ? _regionMapPL[geo.region] || null
+      : null
+  }));
+
+  return res.json(enriched);
 
 
 // ─────────────────────────────────────────────────────────────────────────────

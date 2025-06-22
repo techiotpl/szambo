@@ -16,6 +16,10 @@ const geoip      = require('geoip-lite');
 require('dotenv').config();
 const helmet = require('helmet');
 
+// ═══════════ ZGODY – aktualna wersja dokumentów ═══════════
+const CURRENT_TERMS_VERSION   = 1;   // zmienisz na 2 przy nowym PDF
+const CURRENT_PRIVACY_VERSION = 1;
+
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,      // 15 min
@@ -322,6 +326,30 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
 });
 
 
+/** Middleware: wpuszcza tylko, gdy user ma aktualne zgody */
+function consentGuard(req, res, next) {
+  const sql = `
+    SELECT 1
+      FROM user_consents
+     WHERE user_id = $1
+       AND doc_type='terms'   AND version=$2
+       AND EXISTS (
+         SELECT 1 FROM user_consents
+          WHERE user_id=$1 AND doc_type='privacy' AND version=$3
+       )`;
+  db.query(sql, [req.user.id, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION])
+    .then(r => {
+      if (r.rowCount) return next();          // OK – ma zgody
+      console.log('⛔ consentGuard – brak zgody u', req.user.email);
+      res.status(403).send('CONSENT_REQUIRED');
+    })
+    .catch(e => {
+      console.error('❌ consentGuard DB err', e);
+      res.status(500).send('server error');
+    });
+}
+
+
 //-------------------------------------------------------------
 //pingujemy server  hobby zeby nie padł 
 //------------------------------------------------------------
@@ -536,7 +564,7 @@ app.get('/ads', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/device/:serial/params', auth, async (req, res) => {
+app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const { serial } = req.params;
   const q = `
     SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
@@ -550,7 +578,7 @@ app.get('/device/:serial/params', auth, async (req, res) => {
 });
 
 // GET /device/:serial/measurements – ostatnie ≤10 rekordów
-app.get('/device/:serial/measurements', auth, async (req, res) => {
+app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => {
   const { serial } = req.params;
   const q = `
     SELECT distance_cm, ts
@@ -673,8 +701,27 @@ app.post('/login', authLimiter, async (req, res) => {
     console.error(`❌ [POST /login] Błąd przy generowaniu tokenu dla: ${email}`, err);
     return res.status(500).send('Błąd serwera');
   }
-  console.log(`✅ [POST /login] Poprawne logowanie: ${email}`);
-  return res.json({ token });
+  // konto nieaktywne?
+  if (!u.is_active) {
+    console.log(`⛔ login: konto zablokowane ${email}`);
+    return res.status(403).send('ACCOUNT_INACTIVE');
+  }
+
+  // sprawdź, czy są aktualne zgody
+  const { rows: consentRows } = await db.query(
+    `SELECT 1
+       FROM user_consents
+      WHERE user_id = $1
+        AND doc_type='terms'   AND version=$2
+        AND EXISTS (SELECT 1 FROM user_consents
+                     WHERE user_id=$1 AND doc_type='privacy' AND version=$3)`,
+    [u.id, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION]
+  );
+  const consentOk = !!consentRows.rowCount;
+
+
+  console.log(`✅ [POST /login] ${email} consentOK=${consentOk}`);
+  return res.json({ token, consentOk });
 });
 
 
@@ -830,7 +877,7 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/me/devices', auth, async (req, res) => {
+app.get('/me/devices', auth, consentGuard, async (req, res) => {
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });
@@ -838,7 +885,7 @@ app.get('/me/devices', auth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
-app.put('/device/:id/phone', auth, async (req, res) => {
+app.put('/device/:id/phone', auth, consentGuard, async (req, res) => {
   const phone = normalisePhone(req.body.phone);
   if (!phone) return res.status(400).send('Invalid phone');
   await db.query('UPDATE devices SET phone=$1 WHERE id=$2 AND user_id=$3', [
@@ -1301,7 +1348,7 @@ if (d.old_flag && !row.new_flag) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial_number/vars – zwraca distance, voltage, ts, empty_cm, empty_ts i procent
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/device/:serial_number/vars', auth, async (req, res) => {
+app.get('/device/:serial_number/vars', auth, consentGuard, async (req, res) => {
   const { serial_number } = req.params;
   const q = `
     SELECT
@@ -1330,7 +1377,7 @@ app.get('/device/:serial_number/vars', auth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /device/:serial/params – zapis nowych parametrów (walidacja kluczy)
 // ─────────────────────────────────────────────────────────────────────────────
-app.patch('/device/:serial/params', auth, async (req, res) => {
+app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
   const { serial } = req.params;
   const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
   const allowedFields = new Set([
@@ -1390,7 +1437,7 @@ smsPayments(app, db, auth);  // rejestruje /sms/orders i /sms/verify
 // ─────────────────────────────────────────────────────────────────────────────
 
 // na samym dole, przed app.listen:
-app.get('/device/:serial/empties', auth, async (req, res) => {
+app.get('/device/:serial/empties', auth, consentGuard, async (req, res) => {
   const { serial } = req.params;
   // najpierw znajdź device.id
   const { rows: dev } = await db.query(
@@ -1410,5 +1457,30 @@ app.get('/device/:serial/empties', auth, async (req, res) => {
   res.json(rows);
 });
 
+// ──────────────────────────────────────────────────────────
+// POST /consent/accept – zapisuje kliknięcie
+// ──────────────────────────────────────────────────────────
+app.post('/consent/accept', auth, async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0];
+  const ua = req.headers['user-agent'] || '';
+  console.log(`[CONSENT] accept ${req.user.email} IP=${ip}`);
+  await db.query(`
+    INSERT INTO user_consents (user_id, doc_type, version, ip, user_agent)
+    VALUES ($1,'terms',   $2,$3,$4) ON CONFLICT DO NOTHING;
+    INSERT INTO user_consents (user_id, doc_type, version, ip, user_agent)
+    VALUES ($1,'privacy', $5,$3,$4) ON CONFLICT DO NOTHING;`,
+    [req.user.id, CURRENT_TERMS_VERSION, ip, ua, CURRENT_PRIVACY_VERSION]
+  );
+  res.sendStatus(200);
+});
+
+// ──────────────────────────────────────────────────────────
+// POST /consent/decline – użytkownik odmawia → blokujemy konto
+// ──────────────────────────────────────────────────────────
+app.post('/consent/decline', auth, async (req, res) => {
+  console.log(`[CONSENT] DECLINE ${req.user.email}`);
+  await db.query('UPDATE users SET is_active = FALSE WHERE id=$1', [req.user.id]);
+  res.sendStatus(200);      // front wyloguje i pokaże info
+});
 
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

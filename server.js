@@ -336,14 +336,16 @@ function consentGuard(req, res, next) {
              (doc_type = 'terms'   AND version = $2)
           OR (doc_type = 'privacy' AND version = $3)
            )`;
+
   db.query(sql, [req.user.id, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION])
-    .then(r => {
-      if (r.rowCount) return next();          // OK – ma zgody
-      console.log('⛔ consentGuard – brak zgody u', req.user.email);
+    .then(({ rows: [row] }) => {
+      const ok = Number(row.cnt) === 2;   // muszą być DWA wiersze
+      if (ok) return next();
+      console.log('⛔ consentGuard – brak zgód u', req.user.email);
       res.status(403).send('CONSENT_REQUIRED');
     })
-    .catch(e => {
-      console.error('❌ consentGuard DB err', e);
+    .catch(err => {
+      console.error('❌ consentGuard DB err', err);
       res.status(500).send('server error');
     });
 }
@@ -707,16 +709,17 @@ app.post('/login', authLimiter, async (req, res) => {
   }
 
   // sprawdź, czy są aktualne zgody
-  const { rows: consentRows } = await db.query(
-    `SELECT 1
+  const { rows:[row] } = await db.query(
+    `SELECT COUNT(*) AS cnt
        FROM user_consents
       WHERE user_id = $1
-        AND doc_type='terms'   AND version=$2
-        AND EXISTS (SELECT 1 FROM user_consents
-                     WHERE user_id=$1 AND doc_type='privacy' AND version=$3)`,
+        AND (
+              (doc_type='terms'   AND version=$2)
+           OR (doc_type='privacy' AND version=$3)
+            )`,
     [u.id, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION]
   );
-  const consentOk = !!consentRows.rowCount;
+ const consentOk = Number(row.cnt) === 2;
 
 
   console.log(`✅ [POST /login] ${email} consentOK=${consentOk}`);

@@ -1464,12 +1464,19 @@ app.post('/consent/accept', auth, async (req, res) => {
   const ip = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0];
   const ua = req.headers['user-agent'] || '';
   console.log(`[CONSENT] accept ${req.user.email} IP=${ip}`);
-  await db.query(`
-    INSERT INTO user_consents (user_id, doc_type, version, ip, user_agent)
-    VALUES ($1,'terms',   $2,$3,$4) ON CONFLICT DO NOTHING;
-    INSERT INTO user_consents (user_id, doc_type, version, ip, user_agent)
-    VALUES ($1,'privacy', $5,$3,$4) ON CONFLICT DO NOTHING;`,
-    [req.user.id, CURRENT_TERMS_VERSION, ip, ua, CURRENT_PRIVACY_VERSION]
+  await db.query(
+    `INSERT INTO user_consents (user_id, doc_type, version, ip, user_agent)
+       VALUES
+         ($1,'terms',   $4, $2, $3),
+         ($1,'privacy', $5, $2, $3)
+     ON CONFLICT DO NOTHING`,
+    [
+      req.user.id,         // $1
+      ip,                  // $2
+      ua,                  // $3
+      CURRENT_TERMS_VERSION,      // $4
+      CURRENT_PRIVACY_VERSION     // $5
+    ]
   );
   res.sendStatus(200);
 });

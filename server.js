@@ -329,14 +329,13 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
 /** Middleware: wpuszcza tylko, gdy user ma aktualne zgody */
 function consentGuard(req, res, next) {
   const sql = `
-    SELECT 1
+    SELECT COUNT(*) AS cnt
       FROM user_consents
      WHERE user_id = $1
-       AND doc_type='terms'   AND version=$2
-       AND EXISTS (
-         SELECT 1 FROM user_consents
-          WHERE user_id=$1 AND doc_type='privacy' AND version=$3
-       )`;
+       AND (
+             (doc_type = 'terms'   AND version = $2)
+          OR (doc_type = 'privacy' AND version = $3)
+           )`;
   db.query(sql, [req.user.id, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION])
     .then(r => {
       if (r.rowCount) return next();          // OK – ma zgody

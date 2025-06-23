@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS users (
   street TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+-- gdy skrypt był już odpalony wcześniej i kolumny nie ma:
+ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT;
 
 --────────────────────────  DEVICES  ──────────────────────
 CREATE TABLE IF NOT EXISTS devices (

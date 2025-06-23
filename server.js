@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT DEFAULT 'client',
   name TEXT,
   company TEXT,
+  street TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -875,11 +876,61 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
   res.send('User created');
 });
+// ─────────────────────────────────────────────────────────────────────────────
+//  USER PROFILE  (wykorzystywane przez UserDataScreen)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /me/profile – zwraca podstawowe dane użytkownika                                */
+app.get(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) => {
+  const { rows } = await db.query(
+    'SELECT email, name, street FROM users WHERE id = $1',
+    [req.user.id]
+  );
+  if (!rows.length) return res.status(404).send('user not found');
+  res.json(rows[0]);
+});
+
+/** PATCH /me/profile – aktualizuje name/street (walidacja pól)                         */
+app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) => {
+  const allowed = new Set(['name', 'street']);
+  const cols = [];
+  const vals = [];
+  let i = 1;
+
+  for (const [k, v] of Object.entries(req.body || {})) {
+    if (!allowed.has(k)) {
+      return res.status(400).send(`field ${k} not allowed`);
+    }
+    if (typeof v !== 'string' || v.trim().length === 0) {
+      return res.status(400).send(`invalid value for ${k}`);
+    }
+    cols.push(`${k} = $${i++}`);
+    vals.push(v.trim());
+  }
+
+  if (!cols.length) {
+    return res.status(400).send('nothing to update');
+  }
+
+  vals.push(req.user.id);
+
+  try {
+    await db.query(
+      `UPDATE users SET ${cols.join(', ')} WHERE id = $${i}`,
+      vals
+    );
+    console.log(`✅ [PATCH /me/profile] updated ${cols.join(', ')} for`, req.user.email);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ error in PATCH /me/profile:', err);
+    res.status(500).send('server error');
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/me/devices', auth, consentGuard, async (req, res) => {
+app.get(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) => {
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });

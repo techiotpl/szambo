@@ -573,7 +573,7 @@ app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const q = `
     SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
            red_cm, sms_limit,do_not_disturb,
-           empty_cm, empty_ts, abonament_expiry
+           empty_cm, empty_ts, abonament_expiry,street
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -1443,6 +1443,7 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     'red_cm',
     'capacity',
     'street',
+    'name',
     'do_not_disturb',
     'sms_limit'
   ]);

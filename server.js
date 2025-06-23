@@ -999,7 +999,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
        RETURNING *`,
       [
         userId,
-        '#' + serie_number.slice(-5).toUpperCase() + ' ' + name,
+        name.trim(),                    // ← zapisujemy dokładnie to, co podasz, lub '' jeśli puste
         serie_number,
         normalisePhone(phone),
         removePolishLetters(street),

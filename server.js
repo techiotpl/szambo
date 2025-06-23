@@ -930,7 +930,7 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /me/devices — zwraca urządzenia zalogowanego usera (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
-app.get(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) => {
+app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => {
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
   res.json(rows);
 });

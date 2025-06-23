@@ -17,8 +17,8 @@ require('dotenv').config();
 const helmet = require('helmet');
 
 // ═══════════ ZGODY – aktualna wersja dokumentów ═══════════
-const CURRENT_TERMS_VERSION   = 4;   // zmienisz na 2 przy nowym PDF
-const CURRENT_PRIVACY_VERSION = 4;
+const CURRENT_TERMS_VERSION   = 5;   // zmienisz na 2 przy nowym PDF
+const CURRENT_PRIVACY_VERSION = 5;
 
 
 const authLimiter = rateLimit({

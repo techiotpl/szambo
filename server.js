@@ -521,11 +521,11 @@ const ADS = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /ads?group=A|B&city=<opcjonalneMiasto>
-// Zwraca listę banerów z żądanej grupy (domyślnie „B”)
+// GET /ads?group=A|B&city=<opcjonalneMiasto>   ----> zmien nizej na false aby wyłaczyć reklamy
+// Zwraca listę banerów z żądanej grupy (domyślnie „B”) 
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  if (process.env.ADS_ENABLED !== 'true') {
+  if (process.env.ADS_ENABLED !== 'false') {
     return res.json([]);
   }
 

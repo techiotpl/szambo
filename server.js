@@ -533,11 +533,11 @@ app.get('/ads', (req, res) => {
     WYŁĄCZONE REKLAMY  – listy miast / regionów
     Dodajesz tu kolejne pozycje, jeśli zajdzie potrzeba
   ──────────────────────────────────────────────*/
-  const DISABLED_CITIES   = new Set(['Bydgoszcz']);
-    const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
+//  const DISABLED_CITIES   = new Set(['Bydgoszcz']);
+ //   const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
 
-   /*──────────────────────────────────────────────
-   Gdy chce nie chcemy nic blokować wywalamy po prostu bydgoszcz i kujawsko o tak 
+  
+  // Gdy chce nie chcemy nic blokować wywalamy po prostu bydgoszcz i kujawsko o tak 
    const DISABLED_CITIES  = new Set();          //   ← pusto
 const DISABLED_REGIONS = new Set();          //   ← pusto
 

@@ -525,7 +525,7 @@ const ADS = {
 // Zwraca listę banerów z żądanej grupy (domyślnie „B”) 
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/ads', (req, res) => {
-  if (process.env.ADS_ENABLED !== 'false') {
+  if (process.env.ADS_ENABLED !== 'true') {
     return res.json([]);
   }
 

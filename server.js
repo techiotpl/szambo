@@ -529,6 +529,20 @@ app.get('/ads', (req, res) => {
     return res.json([]);
   }
 
+    /*──────────────────────────────────────────────
+    WYŁĄCZONE REKLAMY  – listy miast / regionów
+    Dodajesz tu kolejne pozycje, jeśli zajdzie potrzeba
+  ──────────────────────────────────────────────*/
+  const DISABLED_CITIES   = new Set(['Bydgoszcz']);
+    const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
+
+   /*──────────────────────────────────────────────
+   Gdy chce nie chcemy nic blokować wywalamy po prostu bydgoszcz i kujawsko o tak 
+   const DISABLED_CITIES  = new Set();          //   ← pusto
+const DISABLED_REGIONS = new Set();          //   ← pusto
+
+  ──────────────────────────────────────────────*/
+
   // 1) Grupa cenowa: ’A’ – premium, ’B’ – standard (domyślna)
   const group = req.query.group === 'A' ? 'A' : 'B';
 
@@ -547,7 +561,15 @@ app.get('/ads', (req, res) => {
     city = city[0].toUpperCase() + city.slice(1).toLowerCase();
   }
 
-  // 3) Wybierz koszyk; gdy brak w grupie A → fallback do B
+   /* 3) Sprawdź, czy lokalizacja ma reklamy wyłączone */
+  const regionName =
+    (geo && geo.country === 'PL' && _regionMapPL[geo.region]) || null;
+
+  if (DISABLED_CITIES.has(city) || DISABLED_REGIONS.has(regionName)) {
+    return res.json([]);            // ← zero banerów
+  }
+
+  // 4) Wybierz koszyk; gdy brak w grupie A → fallback do B
   const bucket     = ADS[city]   || ADS['OTHER'];
   const rawBanners = bucket[group].length ? bucket[group] : bucket['B'];
 

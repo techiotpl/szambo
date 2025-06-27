@@ -541,7 +541,7 @@ app.get('/ads', (req, res) => {
    const DISABLED_CITIES  = new Set();          //   ← pusto
 const DISABLED_REGIONS = new Set();          //   ← pusto
 
-  ──────────────────────────────────────────────*/
+/*  ──────────────────────────────────────────────*/
 
   // 1) Grupa cenowa: ’A’ – premium, ’B’ – standard (domyślna)
   const group = req.query.group === 'A' ? 'A' : 'B';

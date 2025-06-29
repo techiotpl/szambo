@@ -21,6 +21,13 @@ const CURRENT_TERMS_VERSION   = 5;   // zmienisz na 2 przy nowym PDF
 const CURRENT_PRIVACY_VERSION = 5;
 
 
+// ═══════════   ***  Do  nowej apki techiot_admin  rejestracja device  ***   ═══════════════════════════
+// Hasło do panelu admin – ustaw w Render.com → Environment
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || '').trim();
+if (!ADMIN_PASSWORD) {
+  console.warn('⚠️  Brak zmiennej ADMIN_PASSWORD – /admin/login będzie zawsze odrzucał');
+}
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,      // 15 min
   max: 5,
@@ -78,6 +85,32 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
 
 app.use(cors());
 app.use(bodyParser.json());
+
+// ─────────────────────────────────────────────────────────────
+//         adminowe  do nowej apki   gdzie dodajemy czujnik i tyle
+//  POST /admin/login   { password }
+//  Zwraca JWT z rolą 'admin', gdy hasło = ADMIN_PASSWORD
+// ─────────────────────────────────────────────────────────────
+app.post('/admin/login', (req, res) => {
+  const { password } = req.body || {};
+  if (!password || typeof password !== 'string') {
+    return res.status(400).send('password required');
+  }
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).send('wrong password');
+  }
+
+  // token ważny 12 h – możesz zmienić, jeśli chcesz krócej/dłużej
+  const token = jwt.sign(
+    { id: 'admin', email: 'admin@techiot.local', role: 'admin' },
+    JWT_SECRET,
+    { expiresIn: '12h' }
+  );
+  return res.json({ token });
+});
+
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATABASE (migration i inicjalizacja poola)

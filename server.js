@@ -308,7 +308,7 @@ function normalisePhone(p) {
 }
 
 async function sendSMS(phone, msg) {
-  const { APIKEY: key, APIPASSWORD: pwd } = process.env;
+  const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
   if (!key || !pwd) throw new Error('SMS keys missing');
   const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
   const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });

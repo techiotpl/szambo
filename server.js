@@ -1139,19 +1139,23 @@ await sendEmail(
   htmlContent
 );
 
-    if (normalisePhone(phone)) {
+     if (normalisePhone(phone)) {
       console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
-      await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
+      try {
+        await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
+      } catch (smsErr) {
+        console.error(`❌ SMS send failed (continuing anyway):`, smsErr.message);
+      }
     }
-       // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
+    // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
     const lnsResults = await chirpUpdate(serie_number, name, street);
+
     const ok = lnsResults.some(r => r.ok);
 
     console.log('✅ LNS results:', JSON.stringify(lnsResults));
     return res
       .status(ok ? 200 : 207)
       .json({ user_id: userId, device: dRows[0], lns: lnsResults });
-    res.json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);
     res.status(500).send(e.message);

@@ -332,7 +332,7 @@ async function updateHelium(serie, name, street) {
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH MIDDLEWARE (+kontrola „user nadal istnieje?”)
 // ─────────────────────────────────────────────────────────────────────────────
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).send('Missing token');
   try {

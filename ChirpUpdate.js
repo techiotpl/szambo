@@ -5,7 +5,7 @@ const TARGETS = [
   {
     name: 'Helium',
     base: 'https://console.helium-iot.xyz',
-    appId: 'b1b1bc39-ce10-49f3-88de-3999b1da5cf4',
+    appId: '3e34a4f5-8234-46b8-b7bc-076e431ea18c',
     profileId: '8a862a36-3aba-4c14-9a47-a41a5e33684e',
     tokenEnv: 'HELIUMBEARER',
   },

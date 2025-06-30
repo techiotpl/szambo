@@ -30,7 +30,7 @@ module.exports = async function updateOnLns(serie, name, street) {
 
     try {
       const url = `${t.base}/api/devices/${serie}`;
-      await axios.put(
+      const resp = await axios.put(
         url,
         {
           device: {
@@ -51,7 +51,13 @@ module.exports = async function updateOnLns(serie, name, street) {
         }
       );
 
-      results.push({ ok: true, target: t.name });
+            const ok = String(resp.status).startsWith('2');
+      results.push({
+        ok,
+        target: t.name,
+        status: resp.status,
+        error: ok ? undefined : resp.data?.message ?? 'HTTP ' + resp.status
+      });
       // jeżeli wystarczy pierwszy sukces – break;
     } catch (err) {
       results.push({

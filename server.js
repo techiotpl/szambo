@@ -1061,8 +1061,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
       ]
     );
 
-    // wysyłka e-mail & SMS
-    console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
+
 // 1) Przygotuj pełny szablon HTML
 const htmlContent = `
 <!DOCTYPE html>
@@ -1133,28 +1132,34 @@ const htmlContent = `
 
 // 2) Wyślij e-mail z użyciem nowego szablonu
 
-await sendEmail(
-  email.toLowerCase(),
-  '✅ Konto TechioT',
-  htmlContent
-);
-
-     if (normalisePhone(phone)) {
-      console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
-      try {
-        await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
-      } catch (smsErr) {
-        console.error(`❌ SMS send failed (continuing anyway):`, smsErr.message);
-      }
-    }
     // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
     const lnsResults = await chirpUpdate(serie_number, name, street);
-
     const ok = lnsResults.some(r => r.ok);
-
     console.log('✅ LNS results:', JSON.stringify(lnsResults));
+
+    // jeżeli w żadnym LNS-ie nie znaleziono urządzenia → abort
+    if (!ok) {
+      return res
+        .status(400)
+        .json({ message: 'Urządzenie nie znaleziono w żadnym LNS', lns: lnsResults });
+    }
+
+    // dalej: dopiero gdy któryś LNS potwierdził obecność, wysyłamy maila/SMS
+    console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
+    await sendEmail(
+      email.toLowerCase(),
+      '✅ Konto TechioT',
+      htmlContent
+    );
+
+    if (normalisePhone(phone)) {
+      console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
+      await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
+    }
+
+    // wszystko ok → zwracamy 200
     return res
-      .status(ok ? 200 : 207)
+      .status(200)
       .json({ user_id: userId, device: dRows[0], lns: lnsResults });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);

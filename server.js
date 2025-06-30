@@ -1146,17 +1146,12 @@ await sendEmail(
     }
        // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
     const lnsResults = await chirpUpdate(serie_number, name, street);
-
-    // jeżeli żaden LNS nie przyjął – zwróć 207, żeby frontend mógł pokazać info
     const ok = lnsResults.some(r => r.ok);
-    const respBody = { user_id: userId, device: dRows[0], lns: lnsResults };
 
-    console.log(`✅ LNS results:`, JSON.stringify(lnsResults));
-    res.status(ok ? 200 : 207).json(respBody);
-
-
-
-    console.log(`✅ [POST /admin/create-device-with-user] Użytkownik i urządzenie dodane.`);
+    console.log('✅ LNS results:', JSON.stringify(lnsResults));
+    return res
+      .status(ok ? 200 : 207)
+      .json({ user_id: userId, device: dRows[0], lns: lnsResults });
     res.json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);

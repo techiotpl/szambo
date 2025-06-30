@@ -30,26 +30,40 @@ module.exports = async function updateOnLns(serie, name, street) {
 
     try {
       const url = `${t.base}/api/devices/${serie}`;
-      const resp = await axios.put(
+      const devName = name && name.trim() ? name.trim() : serie; // ← fallback
+      let resp = await axios.put(
         url,
         {
           device: {
             applicationId: t.appId,
             deviceProfileId: t.profileId,
-            name,
+            name: devName,
             description: street,
             tags: {},
             variables: {},
           },
         },
-        {
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          validateStatus: () => true, // nie rzuca wyjątku przy 4xx
-        }
+        { headers: { … }, validateStatus: () => true }
       );
+
+      /* Jeżeli urządzenia nie ma (404) – spróbuj POST */
+      if (resp.status === 404) {
+        resp = await axios.post(
+          `${t.base}/api/devices`,
+          {
+            device: {
+              applicationId: t.appId,
+              deviceProfileId: t.profileId,
+              devEUI: serie,
+              name: devName,
+              description: street,
+              tags: {},
+              variables: {},
+            },
+          },
+          { headers: { … }, validateStatus: () => true }
+        );
+      }
 
             const ok = String(resp.status).startsWith('2');
       results.push({

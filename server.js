@@ -8,6 +8,7 @@ const bcrypt     = require('bcrypt');
 const cors       = require('cors');
 const rateLimit  = require('express-rate-limit');
 const axios      = require('axios');
+const chirpUpdate = require('./ChirpUpdate');   //  update chirpstacka o nazwe itd
 const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
@@ -145,7 +146,7 @@ CREATE TABLE IF NOT EXISTS devices (
   phone2 TEXT,
   tel_do_szambiarza TEXT,
   street TEXT,
-  sms_limit INT  DEFAULT 30,
+  _limit INT  DEFAULT 30,
   red_cm   INT  DEFAULT 30,
   empty_cm INT  DEFAULT 150,
   capacity INT  DEFAULT 8,
@@ -159,8 +160,8 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
---────────────────────────  SMS_ORDERS  ───────────────────
-CREATE TABLE IF NOT EXISTS sms_orders (
+--────────────────────────  _ORDERS  ───────────────────
+CREATE TABLE IF NOT EXISTS _orders (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_id     UUID REFERENCES devices(id) ON DELETE CASCADE,
   serial_number TEXT NOT NULL,
@@ -170,8 +171,8 @@ CREATE TABLE IF NOT EXISTS sms_orders (
   created_at    TIMESTAMPTZ DEFAULT now(),
   paid_at       TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_sms_orders_serial
-  ON sms_orders(serial_number);
+CREATE INDEX IF NOT EXISTS idx__orders_serial
+  ON _orders(serial_number);
 
 --────────────────────────  EMPTIES  ──────────────────────
 CREATE TABLE IF NOT EXISTS empties (
@@ -206,12 +207,12 @@ ALTER TABLE devices
     EXECUTE FUNCTION check_removed_le_capacity();
 
 
---────────────────────────  TRIGGER SMS_ORDER  ────────────
-CREATE OR REPLACE FUNCTION sms_order_after_paid() RETURNS trigger AS $$
+--────────────────────────  TRIGGER _ORDER  ────────────
+CREATE OR REPLACE FUNCTION _order_after_paid() RETURNS trigger AS $$
 BEGIN
   IF NEW.status = 'paid' AND OLD.status <> 'paid' THEN
     UPDATE devices
-      SET sms_limit        = 30,
+      SET _limit        = 30,
           abonament_expiry = COALESCE( abonament_expiry, CURRENT_DATE )
                              + INTERVAL '365 days'
     WHERE id = NEW.device_id;
@@ -221,11 +222,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_sms_order_after_paid ON sms_orders;
-CREATE TRIGGER trg_sms_order_after_paid
-  AFTER UPDATE ON sms_orders
+DROP TRIGGER IF EXISTS trg__order_after_paid ON _orders;
+CREATE TRIGGER trg__order_after_paid
+  AFTER UPDATE ON _orders
   FOR EACH ROW
-  EXECUTE FUNCTION sms_order_after_paid();
+  EXECUTE FUNCTION _order_after_paid();
 `; 
 
 
@@ -306,28 +307,15 @@ function normalisePhone(p) {
   return p.startsWith('+48') ? p : '+48' + p;
 }
 
-async function sendSMS(phone, msg) {
-  const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
-  if (!key || !pwd) throw new Error('SMS keys missing');
-  const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
+async function send(phone, msg) {
+  const { APIKEY: key, APIPASSWORD: pwd } = process.env;
+  if (!key || !pwd) throw new Error(' keys missing');
+  const url = `https://api2.planet.pl/?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
   const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
-  if (r.status !== 200) throw new Error('SMSplanet HTTP ' + r.status);
+  if (r.status !== 200) throw new Error('planet HTTP ' + r.status);
 }
 
-async function updateHelium(serie, name, street) {
-  const token = (process.env.HELIUMBEARER || '').trim();
-  if (!token) return;
-  await axios.put(`https://console.helium-iot.xyz/api/devices/${serie}`, {
-    device: {
-      applicationId: "b1b1bc39-ce10-49f3-88de-3999b1da5cf4",
-      deviceProfileId: "8a862a36-3aba-4c14-9a47-a41a5e33684e",
-      name,
-      description: street,
-      tags:{},
-      variables:{}
-    }
-  }, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
-}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH MIDDLEWARE (+kontrola „user nadal istnieje?”)
@@ -1156,7 +1144,17 @@ await sendEmail(
       console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
       await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
     }
-    await updateHelium(serie_number, name, street);
+       // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
+    const lnsResults = await chirpUpdate(serie_number, name, street);
+
+    // jeżeli żaden LNS nie przyjął – zwróć 207, żeby frontend mógł pokazać info
+    const ok = lnsResults.some(r => r.ok);
+    const respBody = { user_id: userId, device: dRows[0], lns: lnsResults };
+
+    console.log(`✅ LNS results:`, JSON.stringify(lnsResults));
+    res.status(ok ? 200 : 207).json(respBody);
+
+
 
     console.log(`✅ [POST /admin/create-device-with-user] Użytkownik i urządzenie dodane.`);
     res.json({ user_id: userId, device: dRows[0] });

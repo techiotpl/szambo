@@ -307,14 +307,13 @@ function normalisePhone(p) {
   return p.startsWith('+48') ? p : '+48' + p;
 }
 
-async function send(phone, msg) {
+async function sendSMS(phone, msg) {
   const { APIKEY: key, APIPASSWORD: pwd } = process.env;
-  if (!key || !pwd) throw new Error(' keys missing');
-  const url = `https://api2.planet.pl/?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
+  if (!key || !pwd) throw new Error('SMS keys missing');
+  const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
   const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
-  if (r.status !== 200) throw new Error('planet HTTP ' + r.status);
+  if (r.status !== 200) throw new Error('SMSplanet HTTP ' + r.status);
 }
-
 
 
 // ─────────────────────────────────────────────────────────────────────────────

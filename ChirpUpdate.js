@@ -10,11 +10,11 @@ const TARGETS = [
     tokenEnv: 'HELIUMBEARER',
   },
   {
-    name: 'Techiot LNS',
-    base: 'https://lns.techiot.pl',
-    appId: 'inny',
-    profileId: 'inny',
-    tokenEnv: 'TECHIOTBEARER',
+    name: 'Oracle',
+    base: 'http://141.145.220.65:8080/',
+    appId: '0ae7a15d-a123-4deb-b085-e4dcc5a7c486',
+    profileId: 'c9143688-eef4-4d8d-b69a-e3238af2be10',
+    tokenEnv: 'ORACLEBEARER',
   },
 ];
 

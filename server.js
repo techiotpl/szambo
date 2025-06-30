@@ -1045,8 +1045,14 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     );
     const userId = uRows[0].id;
 
-    // create device
-    const { rows: dRows } = await db.query(
+    // otwieramy transakcję
+    const client = await db.connect();
+    let dRows;
+    try {
+      await client.query('BEGIN');
+
+      // create device
+      const { rows } = await client.query(
       `INSERT INTO devices (user_id,name,serial_number,eui,phone,street,abonament_expiry)
        VALUES ($1,$2,$3,$3,$4,$5,$6)
        ON CONFLICT (serial_number) DO NOTHING
@@ -1060,7 +1066,29 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
         moment().add(365, 'days').format('YYYY-MM-DD')
       ]
     );
+      dRows = rows;
 
+      // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
+      const lnsResults = await chirpUpdate(serie_number, name, street);
+      const ok = lnsResults.some(r => r.ok);
+      console.log('✅ LNS results:', JSON.stringify(lnsResults));
+
+      // jeżeli w żadnym LNS-ie nie znaleziono urządzenia → rollback i abort
+      if (!ok) {
+        await client.query('ROLLBACK');
+        return res
+          .status(400)
+          .json({ message: 'Urządzenie nie znaleziono w żadnym LNS, rejestracja przerwana', lns: lnsResults });
+      }
+
+      // commitujemy dopiero gdy LNS OK
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw err;
+    }
+    client.release();
 
 // 1) Przygotuj pełny szablon HTML
 const htmlContent = `
@@ -1132,19 +1160,7 @@ const htmlContent = `
 
 // 2) Wyślij e-mail z użyciem nowego szablonu
 
-    // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
-    const lnsResults = await chirpUpdate(serie_number, name, street);
-    const ok = lnsResults.some(r => r.ok);
-    console.log('✅ LNS results:', JSON.stringify(lnsResults));
 
-    // jeżeli w żadnym LNS-ie nie znaleziono urządzenia → abort
-    if (!ok) {
-      return res
-        .status(400)
-        .json({ message: 'Urządzenie nie znaleziono w żadnym LNS', lns: lnsResults });
-    }
-
-    // dalej: dopiero gdy któryś LNS potwierdził obecność, wysyłamy maila/SMS
     console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
     await sendEmail(
       email.toLowerCase(),
@@ -1158,9 +1174,7 @@ const htmlContent = `
     }
 
     // wszystko ok → zwracamy 200
-    return res
-      .status(200)
-      .json({ user_id: userId, device: dRows[0], lns: lnsResults });
+    return res.status(200).json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);
     res.status(500).send(e.message);

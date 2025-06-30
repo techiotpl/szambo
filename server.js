@@ -330,13 +330,25 @@ async function updateHelium(serie, name, street) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUTH MIDDLEWARE
+// AUTH MIDDLEWARE (+kontrola „user nadal istnieje?”)
 // ─────────────────────────────────────────────────────────────────────────────
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).send('Missing token');
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+
+    // token admina generujemy lokalnie – pomijamy sprawdzanie w DB
+    if (payload.id !== 'admin') {
+      const { rows } = await db.query(
+        'SELECT 1 FROM users WHERE id = $1',
+        [payload.id]
+      );
+      // user usunięty?  → przerwij sesję
+      if (!rows.length) return res.status(401).send('USER_DELETED');
+    }
+
+    req.user = payload;
     return next();
   } catch {
     return res.status(401).send('Invalid token');

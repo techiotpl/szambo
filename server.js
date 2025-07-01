@@ -643,7 +643,7 @@ app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => 
       FROM measurements
      WHERE device_serial = $1
      ORDER BY ts DESC
-     LIMIT 10`;
+     LIMIT 240`;            // -------------> tu dajemy ile ostanich  pomiarów ma   byc
   const { rows } = await db.query(q, [serial]);
   res.json(rows);
 });

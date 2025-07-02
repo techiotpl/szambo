@@ -87,6 +87,16 @@ const ADS = {
 // ─────────────────────────────────────────────────────────────────────────────
 module.exports = function registerAdsRoute(app) {
   // WYŁĄCZONE REKLAMY – na razie pusto, ale zostawiamy miejsce na przyszłość
+
+
+      /*──────────────────────────────────────────────
+    WYŁĄCZONE REKLAMY  – listy miast / regionów
+    Dodajesz tu kolejne pozycje, jeśli zajdzie potrzeba
+  ──────────────────────────────────────────────*/
+ // const DISABLED_CITIES   = new Set(['Bydgoszcz']);
+ //   const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
+
+  ///jesli wyłączamy  reklamy to tak  
   const DISABLED_CITIES  = new Set();
   const DISABLED_REGIONS = new Set();
 

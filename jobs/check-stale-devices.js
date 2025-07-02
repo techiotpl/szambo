@@ -11,7 +11,7 @@ const { Pool } = require('pg');
 const axios    = require('axios');
 require('dotenv').config();
 
-const HRS = 72; // próg braku odpowiedzi (w godzinach)
+const HRS = 48; // próg braku odpowiedzi (w godzinach)
 
 // — pomocnicze funkcje do SMS i e-mail
 function normalisePhone(p) {

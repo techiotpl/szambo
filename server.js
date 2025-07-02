@@ -9,11 +9,12 @@ const cors       = require('cors');
 const rateLimit  = require('express-rate-limit');
 const axios      = require('axios');
 const chirpUpdate = require('./ChirpUpdate');   //  update chirpstacka o nazwe itd
+const registerAdsRoute = require('./reklama');
 const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
-const geoip      = require('geoip-lite');
+
 require('dotenv').config();
 const helmet = require('helmet');
 
@@ -52,27 +53,6 @@ const forgotPasswordLimiter = rateLimit({
     (req.body?.email || req.ip || '').toLowerCase().trim()
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAPOWANIE KODÓW REGION → NAZWA WOJEWÓDZTWA (geoip-lite używa kodów ISO 3166-2)
-// ─────────────────────────────────────────────────────────────────────────────
-const _regionMapPL = {
-  '02': 'Dolnośląskie',
-  '04': 'Kujawsko-Pomorskie',
-  '06': 'Lubelskie',
-  '08': 'Lubuskie',
-  '10': 'Łódzkie',
-  '12': 'Małopolskie',
-  '14': 'Mazowieckie',
-  '16': 'Opolskie',
-  '18': 'Podkarpackie',
-  '20': 'Podlaskie',
-  '22': 'Pomorskie',
-  '24': 'Śląskie',
-  '26': 'Świętokrzyskie',
-  '28': 'Warmińsko-Mazurskie',
-  '30': 'Wielkopolskie',
-  '32': 'Zachodniopomorskie',
-};
 
 const app  = express();
 app.use(helmet());
@@ -80,6 +60,10 @@ app.use(helmet());
 // Gdy aplikacja stoi za proxy (Render, Heroku, Nginx, Cloudflare…)
 // zaufaj 1. wpisowi z X-Forwarded-For, żeby req.ip pokazywało prawdziwy adres
 app.set('trust proxy', 1);
+
+// ───────────────  REKLAMY (/ads)  ───────────────
+registerAdsRoute(app);
+
 
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
@@ -476,148 +460,7 @@ app.get('/events', (req, res) => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MINI "Baza" banerów  –  rozdzielenie na grupę A (premium) i B (standard)
-// ─────────────────────────────────────────────────────────────────────────────
-const ADS = {
-  // MIASTA ─────────────────────────────────────────────────
-  Szczecin: {
-       A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+515490145' },
-       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
-    ],
-    B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg',
-        href: 'tel:+48911223344' }
-    ]
-  },
-  Bydgoszcz: {
-    A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+51' },
-       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+52' }
-    ],
-    B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg',
-        href: 'tel:+663229464' }
-    ]
-  },
 
-  // WOJEWÓDZTWA (fallback gdy GeoIP nie zna miasta) ───────
-  'Kujawsko-Pomorskie': {
-    A: [
-            { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+515490145' },
-       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
-      
-    ],
-    B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg',
-        href: '515490145' }
-    ]
-  },
-  'Zachodniopomorskie': {
-    A: [
-
-            { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg',
-        href: 'tel:+1111' },
-       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+222222' }
-      
-    ],
-    B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
-        href: '997' }
-    ]
-  },
-
-  // DOMYŚLNY koszyk gdy nic nie pasuje ───────────────────
-  OTHER: {
-    A: [
-
-            { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png',
-        href: 'tel:+515490145' },
-       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg',
-        href: 'tel:+515490145' }
-      
-    ],
-    B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg',
-        href: 'https://uniwersal-szambiarka.pl' }
-    ]
-  }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /ads?group=A|B&city=<opcjonalneMiasto>   ----> zmien nizej na false aby wyłaczyć reklamy
-// Zwraca listę banerów z żądanej grupy (domyślnie „B”) 
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/ads', (req, res) => {
-  if (process.env.ADS_ENABLED !== 'true') {
-    return res.json([]);
-  }
-
-    /*──────────────────────────────────────────────
-    WYŁĄCZONE REKLAMY  – listy miast / regionów
-    Dodajesz tu kolejne pozycje, jeśli zajdzie potrzeba
-  ──────────────────────────────────────────────*/
- // const DISABLED_CITIES   = new Set(['Bydgoszcz']);
- //   const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
-
-  
-  // Gdy chce nie chcemy nic blokować wywalamy po prostu bydgoszcz i kujawsko o tak 
-   const DISABLED_CITIES  = new Set();          //   ← pusto
- const DISABLED_REGIONS = new Set();          //   ← pusto
-
-/*  ──────────────────────────────────────────────*/
-
-  // 1) Grupa cenowa: ’A’ – premium, ’B’ – standard (domyślna)
-  const group = req.query.group === 'A' ? 'A' : 'B';
-
-  // 2) Ustal miasto / województwo – najpierw query-param, potem GeoIP
-  let city = (req.query.city || '').trim();
-  const ip = (req.headers['x-forwarded-for'] || req.ip || '')
-               .split(',')[0].trim();
-  const geo = geoip.lookup(ip);
-
-  if (!city && geo) {
-    city = geo.city ||
-           (geo.country === 'PL' && _regionMapPL[geo.region]) ||
-           '';
-  }
-  if (city) {
-    city = city[0].toUpperCase() + city.slice(1).toLowerCase();
-  }
-
-   /* 3) Sprawdź, czy lokalizacja ma reklamy wyłączone */
-  const regionName =
-    (geo && geo.country === 'PL' && _regionMapPL[geo.region]) || null;
-
-  if (DISABLED_CITIES.has(city) || DISABLED_REGIONS.has(regionName)) {
-    return res.json([]);            // ← zero banerów
-  }
-
-  // 4) Wybierz koszyk; gdy brak w grupie A → fallback do B
-  const bucket     = ADS[city]   || ADS['OTHER'];
-  const rawBanners = bucket[group].length ? bucket[group] : bucket['B'];
-
-  // 4) Doklej każdemu bannerowi id, city, region
-  const enriched = rawBanners.map((b, idx) => ({
-    id:     `${city || 'OTHER'}-${group}-${idx}`,
-    img:    b.img,
-    href:   b.href,
-    city:   city || null,
-    region: (geo && geo.country === 'PL' && _regionMapPL[geo.region])
-            ? _regionMapPL[geo.region]
-            : null
-  }));
-
-  return res.json(enriched);
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial/params – pola konfiguracyjne w „Ustawieniach”

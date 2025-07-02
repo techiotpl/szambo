@@ -1063,7 +1063,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
         serie_number,
         normalisePhone(phone),
         removePolishLetters(street),
-        moment().add(365, 'days').format('YYYY-MM-DD')
+        moment().add(366, 'days').format('YYYY-MM-DD')
       ]
     );
       dRows = rows;

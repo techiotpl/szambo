@@ -100,7 +100,7 @@ app.post('/admin/login', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // DATABASE (migration i inicjalizacja poola)
 // ─────────────────────────────────────────────────────────────────────────────
-const db = new Pool({ connectionString: process.env.DATABASE_URL });
+
 
 const MIGRATION = String.raw`
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -214,14 +214,40 @@ CREATE TRIGGER trg__order_after_paid
 `; 
 
 
-(async () => {
-  try {
-    await db.query(MIGRATION);
-    console.log('✅ Migration executed (tables ensured).');
-  } catch (e) {
-    console.error('❌ Migration error:', e);
-  }
-})();
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,                 // trochę mniejszy limit połączeń
+  idleTimeoutMillis: 30_000
+});
+
+// ► Migracja odpalana **tylko**, gdy RUN_MIGRATION=true
+if (process.env.RUN_MIGRATION === 'true') {
+  (async () => {
+    const client = await db.connect();
+    try {
+      // unikamy wyścigu o DDL: jedna instancja dostaje lock - reszta czeka
+      const { rows: [{ ok }] } =
+        await client.query('SELECT pg_try_advisory_lock(42) AS ok');
+      if (!ok) {
+        console.log('⏩ Inna instancja trzyma lock – pomijam migrację');
+        return;
+      }
+
+      await client.query('BEGIN');
+      await client.query(MIGRATION);
+      await client.query('COMMIT');
+      console.log('✅ Migration executed.');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('❌ Migration error:', e);
+      process.exit(1);      // nie startuj web-serwera, jeśli DDL się wywalił
+    } finally {
+      client.release();
+    }
+  })();
+}
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SMTP KONFIGURACJA (nodemailer)

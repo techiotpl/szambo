@@ -1214,7 +1214,7 @@ if (d.old_flag && !row.new_flag) {
     const num = normalisePhone(d.phone);
     if (num) {
      try {
-        await sendSMS(num, '✅ Zbiornik opróżniony – licznik wyzerowany.');
+        await sendSMS(num, '✅ Zbiornik opróżniony,  nie dłuzej niż 4h temu.');
         await db.query(
           'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
           [d.id]

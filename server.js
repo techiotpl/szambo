@@ -496,7 +496,7 @@ app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const q = `
     SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
            red_cm, sms_limit,do_not_disturb,
-           empty_cm, empty_ts, abonament_expiry,street
+           empty_cm, empty_ts, abonament_expiry,street,sms_after_empty
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -535,7 +535,8 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'abonament_expiry',
     'sms_limit',
     'alert_email',
-    'trigger_dist'
+    'trigger_dist',
+    'sms_after_empty'
   ]);
   const cols = [];
   const vals = [];
@@ -553,6 +554,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
       if (Number.isNaN(num) || num < 0) {
         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
       }
+      
     }
     if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
       return res.status(400).send('Niepoprawny email');
@@ -560,6 +562,12 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     if (k === 'trigger_dist') {
       if (typeof v !== 'boolean') {
         return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
+      
+      }
+          }
+    if (k === 'sms_after_empty') {
+      if (typeof v !== 'boolean') {
+        return res.status(400).send('sms_after_empty must be boolean');
       }
     }
     cols.push(`${k} = $${i++}`);
@@ -1079,6 +1087,7 @@ const dev = await db.query(
      trigger_dist AS old_flag, 
      do_not_disturb,
      sms_limit,
+     sms_after_empty,
      alert_email
    FROM devices
   WHERE serial_number = $1`,
@@ -1200,6 +1209,23 @@ if (d.old_flag && !row.new_flag) {
     'UPDATE devices SET last_removed_m3 = $1 WHERE id = $2',
     [removed, d.id]
   );
+    /* 5) jednorazowy SMS „opróżniono” ---------------------------------- */
+  if (d.sms_after_empty && d.sms_limit > 0 && d.phone) {
+    const num = normalisePhone(d.phone);
+    if (num) {
+     try {
+        await sendSMS(num, '✅ Zbiornik opróżniony – licznik wyzerowany.');
+        await db.query(
+          'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
+          [d.id]
+        );
+        console.log(`📤 SMS po opróżnieniu wysłany do ${num}`);
+      } catch (e) {
+        console.error('❌ SMS po opróżnieniu – błąd:', e);
+      }
+    }
+  }
+
 
   console.log(`   → empties log: prev=${prevCm}cm, now=${distance}cm, removed=${removed}m³`);
 }
@@ -1396,7 +1422,8 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     'street',
     'name',
     'do_not_disturb',
-    'sms_limit'
+    'sms_limit',
+    'sms_after_empty'
   ]);
   const cols = [];
   const vals = [];
@@ -1408,6 +1435,9 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     }
     if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
       return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    }
+        if (k === 'sms_after_empty' && typeof v !== 'boolean') {
+      return res.status(400).send('sms_after_empty must be boolean');
     }
     if (k === 'red_cm' || k === 'sms_limit') {
       const num = Number(v);

@@ -1105,6 +1105,21 @@ const dev = await db.query(
     /* 3) payload --------------------------------------------------------- */
     
     const obj      = req.body.object || {};
+
+    /*────────────────  ISSUE‑ONLY payload  ──────────────────
+      Jeśli LoRa uplink wygląda tak:
+        "object": { "issue": true }
+      – nie ma sensu przechodzić całej logiki pomiaru.
+      Zamiast tego logujemy i wypychamy SSE.
+    */
+    if (Object.keys(obj).length === 1 && obj.issue === true) {
+      const iso = new Date().toISOString();
+      console.warn(`🚨 ISSUE flag received from ${devEui} (${iso})`);
+      // możesz to później przechwycić w aplikacji
+      sendEvent({ serial: devEui, issue: true, ts: iso });
+      return res.send('OK (issue flag)');
+    }
+
     const distance = obj.distance ?? null;  // cm
     const voltage  = obj.voltage  ?? null;  // V
     /* 3a) radio parameters ---------------------------------------------- */

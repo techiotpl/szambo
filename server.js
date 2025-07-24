@@ -1114,11 +1114,15 @@ const dev = await db.query(
     */
     if (Object.keys(obj).length === 1 && (obj.issue === 1 || obj.issue === '1')) {
       const iso = new Date().toISOString();
-      const msg = '🚨 czujnik zabrudzony,twoj kolejny pomiar moze byc falszywy, sprawdz czujnik';
-      console.warn(`🚨 ISSUE(1) flag received from ${devEui} (${iso})`);
+      const msg = '🚨 czujnik zabrudzony, twoj kolejny pomiar moze byc falszywy – sprawdz czujnik';
+      const limit = Number(d.sms_limit) || 0;
+
+      console.warn(
+        `🚨 ISSUE(1) flag received from ${devEui} (${iso}) phone=${d.phone || '-'} sms_limit=${limit}`
+      );
 
       let smsSent = false;
-      if (d.phone && d.sms_limit > 0) {
+      if (d.phone && limit > 0) {
         const num = normalisePhone(d.phone);
         if (num) {
           try {
@@ -1128,21 +1132,31 @@ const dev = await db.query(
               'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
               [d.id]
             );
+            console.log(`📤 issue:1 → SMS sent to ${num}, new sms_limit=${limit - 1}`);
           } catch (e) {
             console.error('❌ issue:1 SMS send error:', e);
           }
+        } else {
+          console.warn('⚠️ issue:1 → phone present but could not normalize');
         }
+      } else {
+        console.log(`ℹ️ issue:1 → SMS skipped (no phone or sms_limit=${limit})`);
       }
 
-      if (!smsSent && d.alert_email) {
-        try {
-          await sendEmail(
-            d.alert_email,
-            '🚨 Czujnik zabrudzony',
-            `<p>${msg}</p>`
-          );
-        } catch (e) {
-          console.error('❌ issue:1 e-mail send error:', e);
+      if (!smsSent) {
+        if (d.alert_email) {
+          try {
+            await sendEmail(
+              d.alert_email,
+              '🚨 Czujnik zabrudzony',
+              `<p>${msg}</p>`
+            );
+            console.log(`✉️ issue:1 → email sent to ${d.alert_email}`);
+          } catch (e) {
+            console.error('❌ issue:1 e-mail send error:', e);
+          }
+        } else {
+          console.warn('⚠️ issue:1 → no SMS and no alert_email – nothing sent');
         }
       }
 

@@ -1107,17 +1107,47 @@ const dev = await db.query(
     const obj      = req.body.object || {};
 
     /*────────────────  ISSUE‑ONLY payload  ──────────────────
-      Jeśli LoRa uplink wygląda tak:
-        "object": { "issue": true }
-      – nie ma sensu przechodzić całej logiki pomiaru.
-      Zamiast tego logujemy i wypychamy SSE.
+      Uplink:
+        "object": { "issue": 1 }
+      → log, SMS (jeśli jest numer i sms_limit > 0) + decrement,
+        inaczej fallback na e‑mail. Emitujemy też SSE.
     */
-    if (Object.keys(obj).length === 1 && obj.issue === true) {
+    if (Object.keys(obj).length === 1 && (obj.issue === 1 || obj.issue === '1')) {
       const iso = new Date().toISOString();
-      console.warn(`🚨 ISSUE flag received from ${devEui} (${iso})`);
-      // możesz to później przechwycić w aplikacji
-      sendEvent({ serial: devEui, issue: true, ts: iso });
-      return res.send('OK (issue flag)');
+      const msg = '🚨 czujnik zabrudzony,twoj kolejny pomiar moze byc falszywy, sprawdz czujnik';
+      console.warn(`🚨 ISSUE(1) flag received from ${devEui} (${iso})`);
+
+      let smsSent = false;
+      if (d.phone && d.sms_limit > 0) {
+        const num = normalisePhone(d.phone);
+        if (num) {
+          try {
+            await sendSMS(num, msg);
+            smsSent = true;
+            await db.query(
+              'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
+              [d.id]
+            );
+          } catch (e) {
+            console.error('❌ issue:1 SMS send error:', e);
+          }
+        }
+      }
+
+      if (!smsSent && d.alert_email) {
+        try {
+          await sendEmail(
+            d.alert_email,
+            '🚨 Czujnik zabrudzony',
+            `<p>${msg}</p>`
+          );
+        } catch (e) {
+          console.error('❌ issue:1 e-mail send error:', e);
+        }
+      }
+
+      sendEvent({ serial: devEui, issue: 1, ts: iso });
+      return res.send('OK (issue=1)');
     }
 
     const distance = obj.distance ?? null;  // cm

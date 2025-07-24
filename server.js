@@ -1130,7 +1130,7 @@ const dev = await db.query(
     */
     if (Object.keys(obj).length === 1 && (obj.issue === 1 || obj.issue === '1')) {
       const iso = new Date().toISOString();
-      const msg = '🚨 czujnik zabrudzony, twoj kolejny pomiar moze byc falszywy – sprawdz czujnik';
+      const msg = ' czujnik zabrudzony, twoj kolejny pomiar moze byc falszywy – sprawdz czujnik';
       const limit = Number(d.sms_limit) || 0;
 
       console.warn(

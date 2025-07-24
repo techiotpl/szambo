@@ -1289,7 +1289,7 @@ if (d.old_flag && !row.new_flag) {
     const num = normalisePhone(d.phone);
     if (num) {
      try {
-        await sendSMS(num, '✅ Zbiornik opróżniony,  nie dłuzej niż 4h temu.');
+        await sendSMS(num, '✅ Zbiornik opróżniony,  nie dłuzej niż 4h temu.', 'after_empty');
         await db.query(
           'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
           [d.id]
@@ -1334,7 +1334,7 @@ if (d.old_flag && !row.new_flag) {
         for (const num of toNumbers) {
           if (row.sms_limit - usedSms <= 0) break; // nie ma już limitu
           try {
-            await sendSMS(num, msg);
+            await sendSMS(num, msg, 'threshold');
             usedSms++;
           } catch (smsErr) {
             console.error(`❌ Błąd przy wysyłaniu SMS do ${num}:`, smsErr);
@@ -1352,7 +1352,7 @@ if (d.old_flag && !row.new_flag) {
           const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Prosze o oproznienie. Tel: ${toNumbers[0] || 'brak'}`;
           try {
             console.log(`📲 [POST /uplink] Wysyłam SMS do szambiarza: ${szam}`);
-            await sendSMS(szam, msg2);
+            await sendSMS(szam, msg2, 'szambiarz');
             row.sms_limit--;
           } catch (smsErr) {
             console.error(`❌ Błąd przy wysyłaniu SMS do szambiarza (${szam}):`, smsErr);

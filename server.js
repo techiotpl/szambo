@@ -317,12 +317,28 @@ function normalisePhone(p) {
   return p.startsWith('+48') ? p : '+48' + p;
 }
 
-async function sendSMS(phone, msg) {
+async function sendSMS(phone, msg, tag = '') {
   const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
   if (!key || !pwd) throw new Error('SMS keys missing');
   const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(phone)}&msg=${encodeURIComponent(msg)}`;
-  const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
-  if (r.status !== 200) throw new Error('SMSplanet HTTP ' + r.status);
+ const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
+  if (r.status !== 200) {
+    throw new Error('SMSplanet HTTP ' + r.status);
+  }
+  const data = r.data;
+  console.log(`📨 SMSPlanet (${tag || 'no-tag'}) resp →`, JSON.stringify(data));
+  // Zależnie od API SMSPlanet – dopasuj warunek do realnego pola „sukcesu”
+  const logicalOk =
+    (typeof data === 'object' && (
+      data.status === 'OK' ||
+      data.result === 'OK' ||
+      data.success === true ||
+      data.error === undefined
+    )) || (typeof data === 'string' && data.toLowerCase().includes('ok'));
+  if (!logicalOk) {
+    throw new Error('SMSplanet logic error: ' + JSON.stringify(data));
+  }
+  return data;
 }
 
 
@@ -1126,13 +1142,13 @@ const dev = await db.query(
         const num = normalisePhone(d.phone);
         if (num) {
           try {
-            await sendSMS(num, msg);
+            await sendSMS(num, msg, 'issue');
             smsSent = true;
-            await db.query(
-              'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
+            const { rows: [lim] } = await db.query(
+              'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1 RETURNING sms_limit',
               [d.id]
             );
-            console.log(`📤 issue:1 → SMS sent to ${num}, new sms_limit=${limit - 1}`);
+            console.log(`📤 issue:1 → SMS sent to ${num}, new sms_limit=${lim.sms_limit}`);
           } catch (e) {
             console.error('❌ issue:1 SMS send error:', e);
           }

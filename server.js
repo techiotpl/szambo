@@ -1175,7 +1175,17 @@ const dev = await db.query(
           console.warn('⚠️ issue:1 → no SMS and no alert_email – nothing sent');
         }
       }
-
+      // dodatkowo: powiadomienie wewnętrzne
+      try {
+        await sendEmail(
+          'biuro@techiot.pl',
+          `ISSUE(1) – możliwy problem z czujnikiem ${devEui}`,
+          `<p>Możliwy problem z czujnikiem o numerze seryjnym <b>${devEui}</b> (issue=1).<br/>Czas: ${iso}</p>`
+        );
+        console.log('✉️ issue:1 → email sent to biuro@techiot.pl');
+      } catch (e) {
+        console.error('❌ issue:1 internal email error:', e);
+      }
       sendEvent({ serial: devEui, issue: 1, ts: iso });
       return res.send('OK (issue=1)');
     }

@@ -1337,8 +1337,20 @@ if (d.old_flag && !row.new_flag) {
         const p2 = normalisePhone(row.phone2);
         if (p2) toNumbers.push(p2);
       }
+      // Czy w tym samym uplinku mamy także issue:1?
+      const issueInPayload = (obj.issue === 1 || obj.issue === '1');
       if (toNumbers.length && row.sms_limit > 0) {
-        const msg = `⚠️ Poziom w zbiorniku wynosi ${distance} cm przekroczył wartosc  alarmowa ${row.red_cm} cm`;
+        // Treść SMS zależna od obecności issue:1 oraz tego, czy mamy tel_do_szambiarza
+        let msg;
+        if (issueInPayload) {
+          if (!row.tel_do_szambiarza) {
+            msg = `Poziom w zbiorniku wynosi ${distance} cm przekroczył wartosc  alarmowa ${row.red_cm} cm - TEN POMIAR PRAWDOPODOBNIE JEST NIE WŁASCIWY - SPRAWDZ CZUJNIK`;
+          } else {
+            msg = `Poziom w zbiorniku wynosi ${distance} cm przekroczył wartosc  alarmowa ${row.red_cm} cm - TEN POMIAR PRAWDOPODOBNIE JEST NIE WŁASCIWY,SMS DO FIRMY ASENIZACYJNEJ NIE ZOSTAŁ WYSŁANY`;
+          }
+        } else {
+          msg = `⚠️ Poziom w zbiorniku wynosi ${distance} cm przekroczył wartosc  alarmowa ${row.red_cm} cm`;
+        }
         console.log(`📲 [POST /uplink] Wysyłam SMS na: ${toNumbers.join(', ')}`);
         let usedSms = 0;
         for (const num of toNumbers) {
@@ -1356,7 +1368,10 @@ if (d.old_flag && !row.new_flag) {
       }
 
       // 5b) SMS dla szambiarza (jeśli istnieje i jeśli sms_limit > 0)
-      if (row.tel_do_szambiarza && row.sms_limit > 0) {
+      //     Gdy issue:1 jest w tym samym uplinku → NIE wysyłamy do szambiarza.
+      if (issueInPayload && row.tel_do_szambiarza) {
+        console.log(`⏭️ [POST /uplink] Pomijam SMS do szambiarza (issue:1 w tym samym uplinku).`);
+      } else if (row.tel_do_szambiarza && row.sms_limit > 0) {
         const szam = normalisePhone(row.tel_do_szambiarza);
         if (szam) {
           const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Prosze o oproznienie. Tel: ${toNumbers[0] || 'brak'}`;

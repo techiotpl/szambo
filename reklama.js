@@ -96,12 +96,12 @@ module.exports = function registerAdsRoute(app) {
 
   //jesli wyłączamy tu odkomenetowac a na dole zakomentowac 
 
-  const DISABLED_CITIES   = new Set(['Bydgoszcz']);
-   const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
+ // const DISABLED_CITIES   = new Set(['Bydgoszcz']);
+ //  const DISABLED_REGIONS  = new Set(['Kujawsko-Pomorskie']);
   
   ///jesli wyłączamy  reklamy to tak  
-//  const DISABLED_CITIES  = new Set();
-//  const DISABLED_REGIONS = new Set();
+  const DISABLED_CITIES  = new Set();
+  const DISABLED_REGIONS = new Set();
 
   app.get('/ads', (req, res) => {
     if (process.env.ADS_ENABLED !== 'true') {

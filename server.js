@@ -943,55 +943,80 @@ app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
+// POST /admin/create-device-with-user — tworzenie (lub dopięcie) urządzenia
+//  • gdy użytkownik istnieje → NIE wysyłamy maila/SMS, tylko dopinamy device
+//  • gdy użytkownik nie istnieje → tworzymy konto + mail powitalny (+ SMS)
+//  • sprawdzamy duplikat seriala i wynik chirpUpdate()
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
   try {
-    // Pobierz pola z body (zachowaj wsteczną kompatybilność dla 'name')
     const {
-      serie_number,
+      serie_number,                     // ⬅︎ zachowujemy tę nazwę z formularza
       email,
-      client_name,                        // imię/nazwisko właściciela konta
-      device_name,                        // nazwa urządzenia (np. "Zalanie – Parter")
-      name,                               // (stare pole – dla kompatybilności)
+      client_name,                      // imię/nazwisko (dla konta)
+      device_name,                      // nazwa urządzenia
+      name,                             // (legacy – fallback)
       phone = '0',
       phone2 = null,
       tel_do_szambiarza = '',
       street = 'N/A',
       company = '',
-      device_type                         // 'septic' | 'leak'
+      device_type                       // 'septic' | 'leak'
     } = req.body || {};
 
-    if (!serie_number || !email) {
+    // ── walidacja wejścia ─────────────────────────────────────────
+    const em = String(email || '').trim().toLowerCase();
+    const serial = String(serie_number || '').trim();
+    const typeRaw = String(device_type || '').trim().toLowerCase();
+    if (!em || !serial) {
       return res.status(400).send('serie_number & email required');
     }
+    if (!['septic', 'leak'].includes(typeRaw)) {
+      return res.status(400).send('device_type must be "septic" or "leak"');
+    }
+    // jeśli EUI to 16-znakowy hex – odkomentuj walidację jeśli potrzebna
+    // if (!/^[0-9a-f]{16}$/i.test(serial)) {
+    //   return res.status(400).send('serial_number must be 16 hex chars');
+    // }
 
-    // Walidacja i domyślne wartości
-    const userName = (client_name ?? name ?? '').toString();        // nazwa usera
-    const devName  = (device_name ?? '').toString();                // nazwa device
-    const typeRaw  = (device_type ?? '').toString().toLowerCase();
-    const typeOk   = ['septic', 'leak'].includes(typeRaw) ? typeRaw : 'septic';
+    const userName = (client_name ?? name ?? '').toString().trim();
+    const devName  = (device_name ?? '').toString().trim();
+    const typeOk   = typeRaw;
 
-    console.log(`➕ [/admin/create-device-with-user] ${serie_number} → ${email} (type=${typeOk})`);
-
-    // create/find user
-    const basePwd = email.split('@')[0] + Math.floor(Math.random() * 90 + 10) + '!';
-    const { rows: uRows } = await db.query(
-      `INSERT INTO users (email, password_hash, name, company)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-       RETURNING id`,
-      [ email.toLowerCase(), await bcrypt.hash(basePwd, 10), userName, company ]
-    );
-    const userId = uRows[0].id;
+    console.log(`➕ [/admin/create-device-with-user] ${serial} → ${em} (type=${typeOk})`);
 
     const client = await db.connect();
-    let dRows;
     try {
       await client.query('BEGIN');
 
-      // INSERT urządzenia — TU dodajemy device_type oraz dodatkowe kolumny
-      const { rows } = await client.query(
+      // 1) sprawdź, czy user istnieje
+      const u1 = await client.query(
+        'SELECT id FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1',
+        [em]
+      );
+
+      let userId, userCreated = false, basePwd = null;
+
+      if (u1.rowCount > 0) {
+        // użytkownik istnieje → nie wysyłamy maila/SMS
+        userId = u1.rows[0].id;
+        userCreated = false;
+        console.log(`ℹ️  user exists: ${em} (id=${userId}) — attach device only`);
+      } else {
+        // 2) tworzymy konto z losowym hasłem
+        basePwd = crypto.randomBytes(4).toString('hex'); // 8 znaków
+        const hash = await bcrypt.hash(basePwd, 10);
+        const insU = await client.query(
+          'INSERT INTO users(email, password_hash, name, company) VALUES ($1,$2,$3,$4) RETURNING id',
+          [em, hash, userName, company]
+        );
+        userId = insU.rows[0].id;
+        userCreated = true;
+        console.log(`✅  created user ${em} (id=${userId})`);
+      }
+
+      // 3) wstaw urządzenie (serial unik.)
+      const insD = await client.query(
         `INSERT INTO devices (
            user_id, name, serial_number, eui,
            phone, phone2, tel_do_szambiarza,
@@ -1002,8 +1027,8 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
          RETURNING *`,
         [
           userId,
-          devName.trim(),                                   // nazwa urządzenia (może być pusta)
-          serie_number,
+          devName,                                             // nazwa urządzenia
+          serial,                                              // serial = eui
           normalisePhone(phone),
           phone2 ? normalisePhone(phone2) : null,
           tel_do_szambiarza ? normalisePhone(tel_do_szambiarza) : '',
@@ -1012,14 +1037,18 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
           typeOk
         ]
       );
-      dRows = rows;
 
-      // ► aktualizacja na wszystkich LNS-ach
-      const lnsResults = await chirpUpdate(serie_number, devName || userName, street);
-      const ok = lnsResults.some(r => r.ok);
+      if (insD.rowCount === 0) {
+        // duplikat seriala
+        await client.query('ROLLBACK');
+        return res.status(409).send(`Device ${serial} already exists`);
+      }
+
+      // 4) zaktualizuj opisy w LNS (ChirpStack itp.)
+      const lnsResults = await chirpUpdate(serial, devName || userName || serial, street);
       console.log('✅ LNS results:', JSON.stringify(lnsResults));
-
-      if (!ok) {
+      const anyOk = Array.isArray(lnsResults) && lnsResults.some(r => r && r.ok);
+      if (!anyOk) {
         await client.query('ROLLBACK');
         return res
           .status(400)
@@ -1027,92 +1056,75 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
       }
 
       await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      client.release();
-      throw err;
-    }
-    client.release();
 
-    // E-mail powitalny
-const htmlContent = `
+      // 5) komunikacja zewnętrzna TYLKO gdy user NOWY
+      if (userCreated) {
+        // e-mail powitalny
+        const htmlContent = `
 <!DOCTYPE html>
 <html lang="pl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Twoje konto TechioT</title>
-</head>
-<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
-  <table role="presentation" style="width:100%; border-collapse:collapse;">
-    <tr>
-      <td align="center" style="padding:20px 0;">
-        <table role="presentation" style="width:600px; border-collapse:collapse;
-              background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
-          <tr>
-            <td align="center" style="padding:20px;">
-              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
-                   alt="TechioT Logo" style="max-width:150px; height:auto;">
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
-              <h2 style="color:#333333; font-size:24px; margin:0;">
-                Witamy w TechioT
-              </h2>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:20px;">
-              <p style="color:#555555; font-size:16px; line-height:1.5;">
-                Twoje konto zostało pomyślnie utworzone, a urządzenie dodane do systemu.
-              </p>
-              <table role="presentation" style="width:100%; margin:20px 0; border-collapse:collapse;">
-                <tr>
-                  <td style="padding:10px; background-color:#f0f0f0; border-radius:5px;">
-                    <strong>Login:</strong> ${email}<br>
-                    <strong>Hasło:</strong> ${basePwd}
-                  </td>
-                </tr>
-              </table>
-              <p style="color:#555555; font-size:16px; line-height:1.5;">
-                <strong>Pobierz lub otwórz aplikację TechioT:</strong><br>
-                <a href="intent://openApp#Intent;scheme=techiot;package=pl.techiot.szambocontrol;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dpl.techiot.szambocontrol;end"
-                   style="color:#1a73e8; text-decoration:none; font-size:16px;">
-                  Uruchom aplikację Szambo Control
-                </a>
-              </p>
-              <p style="color:#999999; font-size:12px; line-height:1.4; margin-top:30px;">
-                Ten e-mail został wygenerowany automatycznie, prosimy na niego nie odpowiadać.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
-              <p style="color:#777777; font-size:14px; margin:0;">
-                Zespół <strong>TechioT</strong>
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Twoje konto TechioT</title></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
+  <table role="presentation" style="width:100%;border-collapse:collapse;">
+    <tr><td align="center" style="padding:20px 0;">
+      <table role="presentation" style="width:600px;border-collapse:collapse;background:#ffffff;box-shadow:0 0 10px rgba(0,0,0,0.1);">
+        <tr><td align="center" style="padding:20px;">
+          <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg" alt="TechioT Logo" style="max-width:150px;height:auto;">
+        </td></tr>
+        <tr><td style="padding:0 20px;border-bottom:1px solid #eee;">
+          <h2 style="color:#333;font-size:24px;margin:0;">Witamy w TechioT</h2>
+        </td></tr>
+        <tr><td style="padding:20px;">
+          <p style="color:#555;font-size:16px;line-height:1.5;">Twoje konto zostało pomyślnie utworzone, a urządzenie dodane do systemu.</p>
+          <table role="presentation" style="width:100%;margin:20px 0;border-collapse:collapse;">
+            <tr><td style="padding:10px;background:#f0f0f0;border-radius:5px;">
+              <strong>Login:</strong> ${em}<br>
+              <strong>Hasło:</strong> ${basePwd}
+            </td></tr>
+          </table>
+          <p style="color:#555;font-size:16px;line-height:1.5;">
+            <strong>Pobierz lub otwórz aplikację TechioT:</strong><br>
+            <a href="intent://openApp#Intent;scheme=techiot;package=pl.techiot.szambocontrol;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dpl.techiot.szambocontrol;end"
+               style="color:#1a73e8;text-decoration:none;font-size:16px;">Uruchom aplikację Szambo Control</a>
+          </p>
+          <p style="color:#999;font-size:12px;line-height:1.4;margin-top:30px;">Ten e-mail został wygenerowany automatycznie, prosimy na niego nie odpowiadać.</p>
+        </td></tr>
+        <tr><td align="center" style="padding:10px 20px;background:#fafafa;">
+          <p style="color:#777;font-size:14px;margin:0;">Zespół <strong>TechioT</strong></p>
+        </td></tr>
+      </table>
+    </td></tr>
   </table>
-</body>
-</html>
-`;
-    console.log(`✉️ [/admin/create-device-with-user] e-mail → ${email}`);
-    await sendEmail(email.toLowerCase(), '✅ Konto TechioT', htmlContent);
+</body></html>`;
+        console.log(`✉️  [/admin/create-device-with-user] welcome mail → ${em}`);
+        await sendEmail(em, '✅ Konto TechioT', htmlContent);
 
-    if (normalisePhone(phone)) {
-      console.log(`📱 [/admin/create-device-with-user] SMS → ${phone}`);
-      await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
+        // SMS (opcjonalnie)
+        const nrm = normalisePhone(phone);
+        if (nrm) {
+          console.log(`📱 [/admin/create-device-with-user] welcome SMS → ${nrm}`);
+          await sendSMS(nrm, 'Gratulacje! Pakiet 30 SMS aktywowany.');
+        }
+      } else {
+        console.log('ℹ️  existing user — skipped welcome mail/SMS');
+      }
+
+      return res.status(200).json({
+        ok: true,
+        userCreated,
+        message: userCreated
+          ? 'Założono nowe konto i dodano urządzenie'
+          : 'Dodano urządzenie do istniejącego konta'
+      });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-
-    return res.status(200).json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);
-    res.status(500).send(e.message);
+    return res.status(500).send(e.message || 'server error');
   }
 });
 

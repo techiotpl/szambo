@@ -927,6 +927,21 @@ app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
   }
 });
 
+// DELETE /admin/device/:serial — usuwa pojedyncze urządzenie po serialu
+app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
+  const serial = req.params.serial;
+  try {
+    const r = await db.query('DELETE FROM devices WHERE serial_number = $1 RETURNING id', [serial]);
+    if (r.rowCount === 0) return res.status(404).send(`Device ${serial} not found`);
+    return res.send(`Deleted device ${serial}`);
+  } catch (err) {
+    console.error(`❌ Error in DELETE /admin/device/${serial}:`, err);
+    return res.status(500).send('server error');
+  }
+});
+
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-device-with-user — tworzenie użytkownika + urządzenia
 // ─────────────────────────────────────────────────────────────────────────────

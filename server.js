@@ -1074,31 +1074,34 @@ const htmlContent = `
   }
 });
 
-// ─────────────────── nowy, lekki router /uplink ───────────────────
+// ── NOWY /uplink ───────────────────────────────────────────────────
 app.post('/uplink', async (req, res) => {
   try {
     const devEui = req.body.dev_eui || req.body.devEUI || req.body.deviceInfo?.devEui;
     if (!devEui) return res.status(400).send('dev_eui missing');
 
-    // pobieramy pełny rekord urządzenia
+    // 1) pobieramy urządzenie
     const { rows } = await db.query('SELECT * FROM devices WHERE serial_number=$1', [devEui]);
     if (!rows.length) return res.status(404).send('unknown device');
 
     const dev     = rows[0];
-    const type    = (dev.device_type || 'septic').toLowerCase();
-    const handler = handlers[type] || handlers.septic;   // fallback
+    const type    = (dev.device_type || 'septic').toLowerCase();   // default
+    const handler = handlers[type] || handlers.septic;             // fallback
 
+    // 2) delegujemy całą logikę do modułu w handlers/
     await handler.handleUplink(
       { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment },
       dev,
       req.body
     );
+
     return res.send('OK');
   } catch (e) {
     console.error('uplink error', e);
     return res.status(500).send('uplink error');
   }
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /device/:serial_number/vars – zwraca distance, voltage, ts, empty_cm, empty_ts i procent

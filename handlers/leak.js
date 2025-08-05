@@ -5,6 +5,25 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const obj = body.object || {};
   const now = moment();
 
+  // ───── helper: znajdź "ankrowe" urządzenie puli SMS (septic tego samego usera)
+  async function getSmsAnchor() {
+    try {
+      const { rows } = await db.query(
+        `SELECT id, phone, sms_limit
+           FROM devices
+          WHERE user_id = $1 AND device_type = 'septic'
+          ORDER BY created_at ASC
+          LIMIT 1`,
+        [dev.user_id]
+      );
+      if (rows.length) return rows[0];
+    } catch (e) {
+      console.error('[LEAK] anchor lookup error:', e);
+    }
+    // fallback: sam czujnik (gdy brak septic)
+    return { id: dev.id, phone: dev.phone, sms_limit: dev.sms_limit };
+  }
+
   // ───────────────── LOG: surowy payload ─────────────────
   try {
     console.log(`[LEAK] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
@@ -12,11 +31,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
     console.log(`[LEAK] RX ${dev.serial_number} obj=<unstringifiable>`);
   }
 
-  // ───────────────── 1) Parsowanie statusu ─────────────────
-  // Akceptujemy kilka wariantów:
-  //  • leak: 1 / "1" / true
-  //  • leakage_status: "leak" | "normal" | "alarm" | "ok"
-  //  • status/state: jw.
+  // ───────── 1) Parsowanie statusu zalania ─────────
   let leak = false;
   let leakSrc = 'unknown';
   let rawVal = null;
@@ -27,36 +42,29 @@ module.exports.handleUplink = async function (utils, dev, body) {
     leak = rawVal === 1 || rawVal === '1' || rawVal === true || rawVal === 'true';
   } else {
     const statusStr = (
-      obj.leakage_status ??
-      obj.status ??
-      obj.state ??
-      ''
+      obj.leakage_status ?? obj.status ?? obj.state ?? ''
     ).toString().toLowerCase().trim();
     if (statusStr) {
       rawVal = statusStr;
       leakSrc = 'leakage_status';
-      // zmapuj na boolean
-      leak = ['leak', 'alarm', 'alert', 'wet', 'water'].includes(statusStr) ? true
-           : ['normal', 'ok', 'dry', 'clear'].includes(statusStr) ? false
-           : false; // default
+      leak = ['leak', 'alarm', 'alert', 'wet', 'water'].includes(statusStr)
+        ? true
+        : ['normal', 'ok', 'dry', 'clear'].includes(statusStr)
+        ? false
+        : false;
     }
   }
 
-  // ───────────────── 2) Napięcie baterii (fallbacki) ─────────────────
-  // próbujemy kilku popularnych kluczy
+  // ───────── 2) Napięcie baterii (kilka aliasów) ─────────
   let battV = null;
-  const battCandidates = ['voltage', 'battery', 'batt', 'vbat', 'battery_v'];
-  for (const k of battCandidates) {
+  for (const k of ['voltage', 'battery', 'batt', 'vbat', 'battery_v']) {
     if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') {
       const num = Number(obj[k]);
-      if (!Number.isNaN(num)) {
-        battV = num;
-        break;
-      }
+      if (!Number.isNaN(num)) { battV = num; break; }
     }
   }
 
-  // ───────────────── 3) Anti-spam (cooldown) ─────────────────
+  // ───────── 3) Cooldown (anty-spam) ─────────
   const cooldownMin = Number(dev.leak_alert_cooldown_min) || 180;
   const prevLeak = dev.leak_status === true || dev.leak_status === 't';
   const lastAlertTs = dev.leak_last_alert_ts ? moment(dev.leak_last_alert_ts) : null;
@@ -69,7 +77,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
     + `canAlert=${canAlert} last_alert=${dev.leak_last_alert_ts || 'none'}`
   );
 
-  // ───────────────── 4) Zmiana statusu → zapis + (ew.) alert ─────────────────
+  // ───────── 4) Zmiana statusu + SMS z puli "septic" ─────────
   try {
     if (leak !== prevLeak) {
       console.log(`[LEAK] CHANGE ${dev.serial_number}: ${prevLeak} → ${leak}`);
@@ -84,23 +92,39 @@ module.exports.handleUplink = async function (utils, dev, body) {
       );
 
       if (leak) {
-        if (canAlert && dev.phone) {
+        // wyślij SMS z puli "septic"
+        const anchor = await getSmsAnchor();
+        const targetPhone = dev.phone || anchor.phone; // najpierw phone z czujnika, potem z septic
+
+        if (!canAlert) {
+          console.log(`[LEAK] cooldown – skip SMS (${minutesSinceLast}m since last)`);
+        } else if (!targetPhone) {
+          console.log('[LEAK] no phone on leak or septic – skip SMS');
+        } else {
+          // sprawdź i dekrementuj atomowo (bez zejścia poniżej 0)
+          const num = normalisePhone(targetPhone);
           try {
-            const num = normalisePhone(dev.phone);
-            if (num) {
+            // najpierw „spróbuj” odjąć 1 (warunkowo)
+            const dec = await db.query(
+              `UPDATE devices
+                  SET sms_limit = sms_limit - 1
+                WHERE id = $1 AND sms_limit > 0
+              RETURNING sms_limit`,
+              [anchor.id]
+            );
+            if (dec.rowCount === 0) {
+              console.log(`[LEAK] no SMS credits on anchor=${anchor.id} – skip SMS`);
+            } else {
+              // mamy kredyt → wyślij
               await sendSMS(num, '💧 Wykryto zalanie – sprawdź natychmiast!', 'leak');
               await db.query('UPDATE devices SET leak_last_alert_ts=now() WHERE id=$1', [dev.id]);
-              console.log(`[LEAK] SMS sent to ${num}`);
-            } else {
-              console.log('[LEAK] phone present but not normalisable – SMS skipped');
+              console.log(`[LEAK] SMS sent to ${num}; credits_left=${dec.rows[0].sms_limit}`);
             }
           } catch (e) {
-            console.error('[LEAK] SMS error:', e);
+            console.error('[LEAK] SMS send/decrement error:', e);
+            // (opcjonalnie) przywrócić 1 kredyt, jeśli chcesz „refund” na błąd wysyłki:
+            // await db.query('UPDATE devices SET sms_limit = sms_limit + 1 WHERE id=$1', [anchor.id]);
           }
-        } else if (!canAlert) {
-          console.log(`[LEAK] cooldown – skip SMS (${minutesSinceLast}m since last)`);
-        } else {
-          console.log('[LEAK] no phone – skip SMS');
         }
       }
     } else if (battV !== null) {
@@ -110,10 +134,9 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   } catch (e) {
     console.error('[LEAK] DB update error:', e);
-    // nie przerywamy — wyślemy chociaż SSE
   }
 
-  // ───────────────── 5) SSE dla dashboardu ─────────────────
+  // ───────── 5) SSE ─────────
   try {
     sendEvent({
       serial: dev.serial_number,

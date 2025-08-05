@@ -932,47 +932,78 @@ app.delete('/admin/user/:email', auth, adminOnly, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
   try {
-    const { serie_number, email, name='', phone='0', street='N/A', company='' } = req.body;
-    console.log(`➕ [POST /admin/create-device-with-user] Dodaję device ${serie_number} dla ${email}`);
-    if (!serie_number || !email) return res.status(400).send('serie_number & email required');
+    // Pobierz pola z body (zachowaj wsteczną kompatybilność dla 'name')
+    const {
+      serie_number,
+      email,
+      client_name,                        // imię/nazwisko właściciela konta
+      device_name,                        // nazwa urządzenia (np. "Zalanie – Parter")
+      name,                               // (stare pole – dla kompatybilności)
+      phone = '0',
+      phone2 = null,
+      tel_do_szambiarza = '',
+      street = 'N/A',
+      company = '',
+      device_type                         // 'septic' | 'leak'
+    } = req.body || {};
+
+    if (!serie_number || !email) {
+      return res.status(400).send('serie_number & email required');
+    }
+
+    // Walidacja i domyślne wartości
+    const userName = (client_name ?? name ?? '').toString();        // nazwa usera
+    const devName  = (device_name ?? '').toString();                // nazwa device
+    const typeRaw  = (device_type ?? '').toString().toLowerCase();
+    const typeOk   = ['septic', 'leak'].includes(typeRaw) ? typeRaw : 'septic';
+
+    console.log(`➕ [/admin/create-device-with-user] ${serie_number} → ${email} (type=${typeOk})`);
 
     // create/find user
     const basePwd = email.split('@')[0] + Math.floor(Math.random() * 90 + 10) + '!';
     const { rows: uRows } = await db.query(
-      'INSERT INTO users(email,password_hash,name,company) VALUES ($1,$2,$3,$4) ON CONFLICT (email) DO UPDATE SET email=EXCLUDED.email RETURNING id',
-      [email.toLowerCase(), await bcrypt.hash(basePwd, 10), name, company]
+      `INSERT INTO users (email, password_hash, name, company)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+       RETURNING id`,
+      [ email.toLowerCase(), await bcrypt.hash(basePwd, 10), userName, company ]
     );
     const userId = uRows[0].id;
 
-    // otwieramy transakcję
     const client = await db.connect();
     let dRows;
     try {
       await client.query('BEGIN');
 
-      // create device
+      // INSERT urządzenia — TU dodajemy device_type oraz dodatkowe kolumny
       const { rows } = await client.query(
-      `INSERT INTO devices (user_id,name,serial_number,eui,phone,street,abonament_expiry)
-       VALUES ($1,$2,$3,$3,$4,$5,$6)
-       ON CONFLICT (serial_number) DO NOTHING
-       RETURNING *`,
-      [
-        userId,
-        name.trim(),                    // ← zapisujemy dokładnie to, co podasz, lub '' jeśli puste
-        serie_number,
-        normalisePhone(phone),
-        removePolishLetters(street),
-        moment().add(366, 'days').format('YYYY-MM-DD')
-      ]
-    );
+        `INSERT INTO devices (
+           user_id, name, serial_number, eui,
+           phone, phone2, tel_do_szambiarza,
+           street, abonament_expiry, device_type
+         )
+         VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (serial_number) DO NOTHING
+         RETURNING *`,
+        [
+          userId,
+          devName.trim(),                                   // nazwa urządzenia (może być pusta)
+          serie_number,
+          normalisePhone(phone),
+          phone2 ? normalisePhone(phone2) : null,
+          tel_do_szambiarza ? normalisePhone(tel_do_szambiarza) : '',
+          removePolishLetters(street),
+          moment().add(366, 'days').format('YYYY-MM-DD'),
+          typeOk
+        ]
+      );
       dRows = rows;
 
-      // ► aktualizacja na wszystkich zdefiniowanych LNS-ach
-      const lnsResults = await chirpUpdate(serie_number, name, street);
+      // ► aktualizacja na wszystkich LNS-ach
+      const lnsResults = await chirpUpdate(serie_number, devName || userName, street);
       const ok = lnsResults.some(r => r.ok);
       console.log('✅ LNS results:', JSON.stringify(lnsResults));
 
-      // jeżeli w żadnym LNS-ie nie znaleziono urządzenia → rollback i abort
       if (!ok) {
         await client.query('ROLLBACK');
         return res
@@ -980,7 +1011,6 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
           .json({ message: 'Urządzenie nie znaleziono w żadnym LNS, rejestracja przerwana', lns: lnsResults });
       }
 
-      // commitujemy dopiero gdy LNS OK
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -989,7 +1019,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     }
     client.release();
 
-// 1) Przygotuj pełny szablon HTML
+    // E-mail powitalny
 const htmlContent = `
 <!DOCTYPE html>
 <html lang="pl">
@@ -1056,29 +1086,21 @@ const htmlContent = `
 </body>
 </html>
 `;
-
-// 2) Wyślij e-mail z użyciem nowego szablonu
-
-
-    console.log(`✉️ [POST /admin/create-device-with-user] Wysyłam maila z danymi do ${email}`);
-    await sendEmail(
-      email.toLowerCase(),
-      '✅ Konto TechioT',
-      htmlContent
-    );
+    console.log(`✉️ [/admin/create-device-with-user] e-mail → ${email}`);
+    await sendEmail(email.toLowerCase(), '✅ Konto TechioT', htmlContent);
 
     if (normalisePhone(phone)) {
-      console.log(`📱 [POST /admin/create-device-with-user] Wysyłam SMS do ${phone}`);
+      console.log(`📱 [/admin/create-device-with-user] SMS → ${phone}`);
       await sendSMS(normalisePhone(phone), 'Gratulacje! Pakiet 30 SMS aktywowany.');
     }
 
-    // wszystko ok → zwracamy 200
     return res.status(200).json({ user_id: userId, device: dRows[0] });
   } catch (e) {
     console.error('❌ Error in /admin/create-device-with-user:', e);
     res.status(500).send(e.message);
   }
 });
+
 
 // ── NOWY /uplink ───────────────────────────────────────────────────
 app.post('/uplink', async (req, res) => {

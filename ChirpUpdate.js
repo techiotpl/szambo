@@ -10,7 +10,7 @@ const TARGETS = [
   },
   {
     name: 'Oracle',
-    base: 'http://141.145.220.65:8080',
+    base: 'http://141.145.220.65:8090',
     appId: '0ae7a15d-a123-4deb-b085-e4dcc5a7c486',
     profileId: 'c9143688-eef4-4d8d-b69a-e3238af2be10',
     tokenEnv: 'ORACLEBEARER',

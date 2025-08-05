@@ -115,10 +115,17 @@ module.exports.handleUplink = async function (utils, dev, body) {
             if (dec.rowCount === 0) {
               console.log(`[LEAK] no SMS credits on anchor=${anchor.id} – skip SMS`);
             } else {
-              // mamy kredyt → wyślij
-              await sendSMS(num, '💧 Wykryto zalanie – sprawdź natychmiast!', 'leak');
+              // mamy kredyt → wyślij (z nazwą i opcjonalnym adresem)
+              const devName  = (dev.name && String(dev.name).trim().length)
+                               ? String(dev.name).trim()
+                               : 'czujnik zalania';
+              const place    = (dev.street && String(dev.street).trim().length)
+                               ? ` (${String(dev.street).trim()})`
+                               : '';
+              const smsMsg   = `💧 ${devName}${place}: wykryto zalanie – sprawdź natychmiast!`;
+              await sendSMS(num, smsMsg, 'leak');
               await db.query('UPDATE devices SET leak_last_alert_ts=now() WHERE id=$1', [dev.id]);
-              console.log(`[LEAK] SMS sent to ${num}; credits_left=${dec.rows[0].sms_limit}`);
+              console.log(`[LEAK] SMS sent to ${num}; credits_left=${dec.rows[0].sms_limit}; msg="${smsMsg}"`);
             }
           } catch (e) {
             console.error('[LEAK] SMS send/decrement error:', e);

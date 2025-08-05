@@ -15,6 +15,12 @@ const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
 
+const handlers = {
+  septic: require('./handlers/septic'),
+  leak: require('./handlers/leak'),
+  // dodaj inne typy, jeśli będą
+};
+
 require('dotenv').config();
 const helmet = require('helmet');
 

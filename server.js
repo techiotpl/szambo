@@ -1285,9 +1285,17 @@ app.get('/device/:serial_number/vars', auth, consentGuard, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /device/:serial/params – zapis nowych parametrów (walidacja kluczy)
 // ─────────────────────────────────────────────────────────────────────────────
+// PATCH /device/:serial/params – zapis nowych parametrów (user)
 app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
   const { serial } = req.params;
-  const body = req.body; // np. { phone: "...", red_cm: 40, alert_email: "...", ... }
+  const body = req.body || {};
+
+  // Ostrzeżenie, jeśli serial wygląda podejrzanie krótko
+  if (!serial || String(serial).trim().length < 12) {
+    console.warn(`⚠️  [PATCH /device/${serial}/params] Krótki lub pusty serial (user=${req.user.email})`);
+  }
+
+  // Dozwolone pola do edycji przez użytkownika
   const allowedFields = new Set([
     'phone',
     'phone2',
@@ -1300,91 +1308,168 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     'do_not_disturb',
     'sms_limit',
     'sms_after_empty',
-// —— CO only:
-     'co_phone1',
-     'co_phone2',
-     'co_threshold_ppm'
+    // —— CO only:
+    'co_phone1',
+    'co_phone2',
+    'co_threshold_ppm'
   ]);
-  const cols = [];
-  const vals = [];
-  let i = 1;
-  for (const [k, v] of Object.entries(body)) {
-    if (!allowedFields.has(k)) {
-      console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
-      return res.status(400).send(`Niedozwolone pole: ${k}`);
-    }
-    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
-    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
-      if (v == null || String(v).trim() === '') {
-        cols.push(`${k} = $${i++}`); vals.push(null); continue;
-      }
-      if (typeof v !== 'string') {
-        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
-      }
 
-      const nv = normalisePhone(v.replace(/\s+/g, ''));
-      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
-      cols.push(`${k} = $${i++}`);
-      vals.push(nv);
-      continue;
-    }
-
-   // BOOLEAN
-   if (k === 'sms_after_empty' || k === 'do_not_disturb') {
-     if (typeof v !== 'boolean') {
-       return res.status(400).send(`${k} must be boolean`);
-     }
-   }
-
-    if (k === 'red_cm' || k === 'sms_limit') {
-      const num = Number(v);
-      if (Number.isNaN(num) || num < 0) {
-        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
-      }
-    }
-
-    // PRÓG CO (ppm)
-    if (k === 'co_threshold_ppm') {
-      const num = Number(v);
-      if (!Number.isInteger(num) || num <= 0) {
-        return res.status(400).send('co_threshold_ppm must be a positive integer');
-      }
-    }
-
-    // EMAIL
-    if (k === 'alert_email') {
-      if (v == null || String(v).trim() === '') {
-        cols.push(`${k} = $${i++}`); vals.push(null); continue;
-      }
-      if (typeof v !== 'string' || !v.includes('@')) {
-        return res.status(400).send('Niepoprawny email');
-      }
-    }
-    cols.push(`${k} = $${i++}`);
-    vals.push(v);
+  // 0) wstępna walidacja kluczy
+  const unknown = Object.keys(body).filter(k => !allowedFields.has(k));
+  if (unknown.length) {
+    console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pola: ${unknown.join(', ')} (user=${req.user.email})`);
+    return res.status(400).send(`Niedozwolone pola: ${unknown.join(', ')}`);
   }
-  if (!cols.length) {
-    console.log(`❌ [PATCH /device/${serial}/params] Brak danych do zaktualizowania`);
-    return res.status(400).send('Brak danych do aktualizacji');
-  }
-  vals.push(serial, req.user.id);
-  const q = `UPDATE devices SET ${cols.join(', ')}
-             WHERE serial_number = $${i} AND user_id = $${i+1}`;
-console.log('[PATCH /device]', { serial, bodyKeys: Object.keys(body) });
 
   try {
-  const r = await db.query(q + ' RETURNING id, serial_number, name', vals);
-  if (r.rowCount === 0) {
-    console.log(`⚠️  [PATCH /device/${serial}/params] Brak uprawnień lub nie znaleziono urządzenia`);
-    return res.status(404).send('Device not found or not owned by user');
-  }
-  console.log('UPDATED ROW:', r.rows[0]);
-  return res.sendStatus(200);
+    // 1) Pobierz stan "przed" (i jednocześnie weryfikuj własność)
+    const { rows: beforeRows } = await db.query(
+      `SELECT id, user_id, serial_number, device_type, name,
+              phone, phone2, tel_do_szambiarza, alert_email,
+              red_cm, capacity, street, do_not_disturb, sms_limit, sms_after_empty,
+              co_phone1, co_phone2, co_threshold_ppm
+         FROM devices
+        WHERE serial_number = $1 AND user_id = $2
+        LIMIT 1`,
+      [serial, req.user.id]
+    );
+    if (!beforeRows.length) {
+      console.log(`⚠️  [PATCH /device/${serial}/params] Device not found or not owned by user (${req.user.email})`);
+      return res.status(404).send('Device not found or not owned by user');
+    }
+    const before = beforeRows[0];
+
+    // 2) Zbuduj UPDATE z walidacją wartości
+    const cols = [];
+    const vals = [];
+    let i = 1;
+
+    const pushCol = (k, v) => { cols.push(`${k} = $${i++}`); vals.push(v); };
+
+    for (const [k, vRaw] of Object.entries(body)) {
+      // TELEFONY – pozwól wyczyścić: "" lub null → NULL
+      if (['phone', 'phone2', 'tel_do_szambiarza', 'co_phone1', 'co_phone2'].includes(k)) {
+        if (vRaw == null || String(vRaw).trim() === '') {
+          pushCol(k, null);
+          continue;
+        }
+        if (typeof vRaw !== 'string') {
+          return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+        }
+        const nv = normalisePhone(vRaw.replace(/\s+/g, ''));
+        if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
+        pushCol(k, nv);
+        continue;
+      }
+
+      // BOOLEANY
+      if (k === 'sms_after_empty' || k === 'do_not_disturb') {
+        if (typeof vRaw !== 'boolean') return res.status(400).send(`${k} must be boolean`);
+        pushCol(k, vRaw);
+        continue;
+      }
+
+      // LICZBY
+      if (k === 'red_cm' || k === 'sms_limit') {
+        const num = Number(vRaw);
+        if (!Number.isFinite(num) || num < 0) {
+          return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      if (k === 'capacity') {
+        const num = Number(vRaw);
+        if (!Number.isInteger(num) || num <= 0) {
+          return res.status(400).send('capacity must be a positive integer');
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      if (k === 'co_threshold_ppm') {
+        const num = Number(vRaw);
+        if (!Number.isInteger(num) || num <= 0) {
+          return res.status(400).send('co_threshold_ppm must be a positive integer');
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      // E-MAIL – pozwól wyczyścić
+      if (k === 'alert_email') {
+        if (vRaw == null || String(vRaw).trim() === '') {
+          pushCol(k, null);
+          continue;
+        }
+        if (typeof vRaw !== 'string' || !vRaw.includes('@')) {
+          return res.status(400).send('Niepoprawny email');
+        }
+        pushCol(k, vRaw.trim());
+        continue;
+      }
+
+      // STRINGI (name, street)
+      if (k === 'name' || k === 'street') {
+        if (vRaw == null) { pushCol(k, null); continue; }
+        if (typeof vRaw !== 'string' || vRaw.trim().length === 0) {
+          return res.status(400).send(`invalid value for ${k}`);
+        }
+        pushCol(k, vRaw.trim());
+        continue;
+      }
+
+      // Bezpieczny fallback – jeżeli coś pominęliśmy w if-ach powyżej:
+      pushCol(k, vRaw);
+    }
+
+    if (!cols.length) {
+      console.log(`❌ [PATCH /device/${serial}/params] Brak danych do aktualizacji (user=${req.user.email})`);
+      return res.status(400).send('Brak danych do aktualizacji');
+    }
+
+    // 3) Wykonaj UPDATE
+    vals.push(serial, req.user.id);
+    const q = `
+      UPDATE devices
+         SET ${cols.join(', ')}
+       WHERE serial_number = $${i++} AND user_id = $${i++}
+       RETURNING id, serial_number, device_type, name`;
+    const { rows: afterRows } = await db.query(q, vals);
+
+    if (!afterRows.length) {
+      console.log(`⚠️  [PATCH /device/${serial}/params] Nic nie zaktualizowano (user=${req.user.email})`);
+      return res.status(404).send('Device not found or not owned by user');
+    }
+    const after = afterRows[0];
+
+    // 4) Logi – czytelne i jednoznaczne
+    const changedFields = Object.keys(body).join(', ');
+    if ('name' in body) {
+      console.log(
+        `🛠️  rename ${before.device_type} serial=${before.serial_number} (user=${req.user.email}) ` +
+        `"${before.name || ''}" → "${after.name || ''}"; fields=[${changedFields}]`
+      );
+    } else {
+      console.log(
+        `✅ [PATCH /device/${serial}/params] user=${req.user.email} ` +
+        `type=${before.device_type} serial=${before.serial_number} fields=[${changedFields}]`
+      );
+    }
+
+    // 5) Zwróć mały JSON, żeby front mógł odświeżyć nazwę bez dodatkowego GET
+    return res.status(200).json({
+      id: after.id,
+      serial_number: after.serial_number,
+      name: after.name
+    });
   } catch (err) {
-    console.error(`❌ [PATCH /device/${serial}/params] Błąd bazy:`, err);
+    console.error(`❌ [PATCH /device/${serial}/params] Błąd serwera:`, err);
     return res.status(500).send('Błąd serwera');
   }
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DOKLEJAMY SMS PAYMENTS → po utworzeniu express() i auth middleware

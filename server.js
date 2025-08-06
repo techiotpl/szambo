@@ -18,7 +18,6 @@ const crypto     = require('crypto'); // do losowania nowego hasła
 const handlers = {
   septic: require('./handlers/septic'),
   leak: require('./handlers/leak'),
- co:     require('./handlers/co'),   // ← DODAJ
   // dodaj inne typy, jeśli będą
 };
 
@@ -218,66 +217,6 @@ CREATE TRIGGER trg__order_after_paid
   AFTER UPDATE ON _orders
   FOR EACH ROW
   EXECUTE FUNCTION _order_after_paid();
-  
-  --────────────────────────  UZUPEŁNIENIA SCHEMATU  ──────────────────────
-
--- 1) devices – brakujące kolumny używane przez serwer
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_type       TEXT        DEFAULT 'septic';
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS sms_limit         INT         DEFAULT 30;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS do_not_disturb    BOOLEAN     DEFAULT FALSE;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS sms_after_empty   BOOLEAN     DEFAULT FALSE;
-
--- CO (czujnik czadu)
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_phone1         TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_phone2         TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_threshold_ppm  INT         DEFAULT 50;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_status         BOOLEAN     DEFAULT FALSE;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_ppm            INT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_last_change_ts TIMESTAMPTZ;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_last_alert_ts  TIMESTAMPTZ;
-
--- bateryjka (wspólna)
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_v         NUMERIC(5,2);
-
--- 2) users – pola używane w kodzie
-ALTER TABLE users   ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
-
--- 3) measurements – jeśli brak
-CREATE TABLE IF NOT EXISTS measurements (
-  device_serial TEXT NOT NULL,
-  distance_cm   INT  NOT NULL,
-  ts            TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (device_serial, ts)
-);
-
--- 4) user_consents – wymagane przez consentGuard
-CREATE TABLE IF NOT EXISTS user_consents (
-  id         BIGSERIAL PRIMARY KEY,
-  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
-  doc_type   TEXT NOT NULL CHECK (doc_type IN ('terms','privacy')),
-  version    INT  NOT NULL,
-  ip         TEXT,
-  user_agent TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE (user_id, doc_type, version)
-);
-
--- 5) indeksy pomocnicze
-CREATE INDEX IF NOT EXISTS idx_devices_devicetype ON devices(device_type);
-CREATE INDEX IF NOT EXISTS idx_meas_device_ts     ON measurements(device_serial, ts DESC);
-
--- 6) migracja _limit -> sms_limit (gdyby istniało stare pole)
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name='devices' AND column_name='_limit'
-  )
-  THEN
-    UPDATE devices SET sms_limit = COALESCE(sms_limit, _limit, 30);
-  END IF;
-END$$;
-
 `; 
 
 
@@ -445,10 +384,7 @@ function adminOnly(req, res, next) {
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
     SELECT u.id, u.email, u.name,
-           COALESCE(
-             json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
-             '[]'::json
-           ) AS devices
+           json_agg(d.*) AS devices
       FROM users u
       LEFT JOIN devices d ON d.user_id = u.id
      GROUP BY u.id`;
@@ -527,7 +463,12 @@ function sendEvent(payload) {
   }
 
   const dataAsJson = JSON.stringify(payload);
-const msg = ['event: uplink', `data: ${dataAsJson}`, ''].join('\n');
+  const msg = [
+    'event: uplink',
+    `data: ${dataAsJson}`,
+    '',
+    ''
+  ].join('\n');
 
   clients.forEach(res => {
     try {
@@ -575,14 +516,9 @@ app.get('/events', (req, res) => {
 app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const { serial } = req.params;
   const q = `
-    SELECT
-      phone, phone2, tel_do_szambiarza, capacity, alert_email,
-      red_cm, sms_limit, do_not_disturb,
-      empty_cm, empty_ts, abonament_expiry, street, sms_after_empty,
-      -- pola CO:
-      co_phone1, co_phone2, co_threshold_ppm,
-      -- statusy informacyjne:
-      co_status, co_ppm
+    SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
+           red_cm, sms_limit,do_not_disturb,
+           empty_cm, empty_ts, abonament_expiry,street,sms_after_empty
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -622,11 +558,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'sms_limit',
     'alert_email',
     'trigger_dist',
-    'sms_after_empty',
-	     // —— CO only:
-     'co_phone1',
-     'co_phone2',
-     'co_threshold_ppm'
+    'sms_after_empty'
   ]);
   const cols = [];
   const vals = [];
@@ -636,45 +568,30 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
       console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
-    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
-      if (typeof v !== 'string') {
-        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
-      }
-      const nv = normalisePhone(v.replace(/\s+/g, ''));
-      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
-      cols.push(`${k} = $${i++}`);
-      vals.push(nv);
-      continue;
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
     }
-
-
-    if (k === 'sms_after_empty' || k === 'trigger_dist') {
+    if (k === 'red_cm' || k === 'sms_limit') {
+      const num = Number(v);
+      if (Number.isNaN(num) || num < 0) {
+        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+      }
+      
+    }
+    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
+      return res.status(400).send('Niepoprawny email');
+    }
+    if (k === 'trigger_dist') {
       if (typeof v !== 'boolean') {
-        return res.status(400).send(`${k} must be boolean`);
+        return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
+      
+      }
+          }
+    if (k === 'sms_after_empty') {
+      if (typeof v !== 'boolean') {
+        return res.status(400).send('sms_after_empty must be boolean');
       }
     }
-
-     // LICZBY całkowite/nieujemne
-     if (k === 'red_cm' || k === 'sms_limit') {
-       const num = Number(v);
-       if (Number.isNaN(num) || num < 0) {
-         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
-       }
-     }
-
-     // PRÓG CO (ppm)
-     if (k === 'co_threshold_ppm') {
-       const num = Number(v);
-       if (!Number.isInteger(num) || num <= 0) {
-         return res.status(400).send('co_threshold_ppm must be a positive integer');
-       }
-     }
-
-     // EMAIL
-     if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
-       return res.status(400).send('Niepoprawny email');
-     }
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
@@ -977,7 +894,7 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
 // PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
 app.put('/device/:id/phone', auth, consentGuard, async (req, res) => {
-  const phone = normalisePhone(String(req.body.phone || '').replace(/\s+/g, ''));
+  const phone = normalisePhone(req.body.phone);
   if (!phone) return res.status(400).send('Invalid phone');
   await db.query('UPDATE devices SET phone=$1 WHERE id=$2 AND user_id=$3', [
     phone,
@@ -1054,8 +971,8 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     if (!em || !serial) {
       return res.status(400).send('serie_number & email required');
     }
-    if (!['septic', 'leak', 'co'].includes(typeRaw)) {
-      return res.status(400).send('device_type must be "septic", "leak" or "co"');
+    if (!['septic', 'leak'].includes(typeRaw)) {
+      return res.status(400).send('device_type must be "septic" or "leak"');
     }
     // jeśli EUI to 16-znakowy hex – odkomentuj walidację jeśli potrzebna
     // if (!/^[0-9a-f]{16}$/i.test(serial)) {
@@ -1287,11 +1204,7 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     'name',
     'do_not_disturb',
     'sms_limit',
-    'sms_after_empty',
-// —— CO only:
-     'co_phone1',
-     'co_phone2',
-     'co_threshold_ppm'
+    'sms_after_empty'
   ]);
   const cols = [];
   const vals = [];
@@ -1301,44 +1214,17 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
       console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
-    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
-      if (typeof v !== 'string') {
-        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
-      }
-
-      const nv = normalisePhone(v.replace(/\s+/g, ''));
-      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
-      cols.push(`${k} = $${i++}`);
-      vals.push(nv);
-      continue;
+    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
+      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
     }
-
-   // BOOLEAN
-   if (k === 'sms_after_empty' || k === 'do_not_disturb') {
-     if (typeof v !== 'boolean') {
-       return res.status(400).send(`${k} must be boolean`);
-     }
-   }
-
+        if (k === 'sms_after_empty' && typeof v !== 'boolean') {
+      return res.status(400).send('sms_after_empty must be boolean');
+    }
     if (k === 'red_cm' || k === 'sms_limit') {
       const num = Number(v);
       if (Number.isNaN(num) || num < 0) {
         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
       }
-    }
-
-    // PRÓG CO (ppm)
-    if (k === 'co_threshold_ppm') {
-      const num = Number(v);
-      if (!Number.isInteger(num) || num <= 0) {
-        return res.status(400).send('co_threshold_ppm must be a positive integer');
-      }
-    }
-
-    // EMAIL
-    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
-      return res.status(400).send('Niepoprawny email');
     }
     cols.push(`${k} = $${i++}`);
     vals.push(v);

@@ -18,6 +18,7 @@ const crypto     = require('crypto'); // do losowania nowego hasła
 const handlers = {
   septic: require('./handlers/septic'),
   leak: require('./handlers/leak'),
+ co:     require('./handlers/co'),   // ← DODAJ
   // dodaj inne typy, jeśli będą
 };
 
@@ -444,7 +445,10 @@ function adminOnly(req, res, next) {
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
     SELECT u.id, u.email, u.name,
-           json_agg(d.*) AS devices
+           COALESCE(
+             json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
+             '[]'::json
+           ) AS devices
       FROM users u
       LEFT JOIN devices d ON d.user_id = u.id
      GROUP BY u.id`;
@@ -523,12 +527,7 @@ function sendEvent(payload) {
   }
 
   const dataAsJson = JSON.stringify(payload);
-  const msg = [
-    'event: uplink',
-    `data: ${dataAsJson}`,
-    '',
-    ''
-  ].join('\n');
+const msg = ['event: uplink', `data: ${dataAsJson}`, ''].join('\n');
 
   clients.forEach(res => {
     try {
@@ -576,9 +575,14 @@ app.get('/events', (req, res) => {
 app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const { serial } = req.params;
   const q = `
-    SELECT phone, phone2, tel_do_szambiarza, capacity ,alert_email,
-           red_cm, sms_limit,do_not_disturb,
-           empty_cm, empty_ts, abonament_expiry,street,sms_after_empty
+    SELECT
+      phone, phone2, tel_do_szambiarza, capacity, alert_email,
+      red_cm, sms_limit, do_not_disturb,
+      empty_cm, empty_ts, abonament_expiry, street, sms_after_empty,
+      -- pola CO:
+      co_phone1, co_phone2, co_threshold_ppm,
+      -- statusy informacyjne:
+      co_status, co_ppm
       FROM devices
      WHERE serial_number = $1`;
   const { rows } = await db.query(q, [serial]);
@@ -632,30 +636,45 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
       console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
-      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
-    }
-    if (k === 'red_cm' || k === 'sms_limit') {
-      const num = Number(v);
-      if (Number.isNaN(num) || num < 0) {
-        return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
+    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
+      if (typeof v !== 'string') {
+        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
       }
-      
+      const nv = normalisePhone(v.replace(/\s+/g, ''));
+      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
+      cols.push(`${k} = $${i++}`);
+      vals.push(nv);
+      continue;
     }
-    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
-      return res.status(400).send('Niepoprawny email');
-    }
-    if (k === 'trigger_dist') {
+
+
+    if (k === 'sms_after_empty' || k === 'trigger_dist') {
       if (typeof v !== 'boolean') {
-        return res.status(400).send(`Niepoprawna wartość dla pola: trigger_dist`);
-      
-      }
-          }
-    if (k === 'sms_after_empty') {
-      if (typeof v !== 'boolean') {
-        return res.status(400).send('sms_after_empty must be boolean');
+        return res.status(400).send(`${k} must be boolean`);
       }
     }
+
+     // LICZBY całkowite/nieujemne
+     if (k === 'red_cm' || k === 'sms_limit') {
+       const num = Number(v);
+       if (Number.isNaN(num) || num < 0) {
+         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
+       }
+     }
+
+     // PRÓG CO (ppm)
+     if (k === 'co_threshold_ppm') {
+       const num = Number(v);
+       if (!Number.isInteger(num) || num <= 0) {
+         return res.status(400).send('co_threshold_ppm must be a positive integer');
+       }
+     }
+
+     // EMAIL
+     if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
+       return res.status(400).send('Niepoprawny email');
+     }
     cols.push(`${k} = $${i++}`);
     vals.push(v);
   }
@@ -958,7 +977,7 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
 // PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
 app.put('/device/:id/phone', auth, consentGuard, async (req, res) => {
-  const phone = normalisePhone(req.body.phone);
+  const phone = normalisePhone(String(req.body.phone || '').replace(/\s+/g, ''));
   if (!phone) return res.status(400).send('Invalid phone');
   await db.query('UPDATE devices SET phone=$1 WHERE id=$2 AND user_id=$3', [
     phone,
@@ -1035,8 +1054,8 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     if (!em || !serial) {
       return res.status(400).send('serie_number & email required');
     }
-    if (!['septic', 'leak'].includes(typeRaw)) {
-      return res.status(400).send('device_type must be "septic" or "leak"');
+    if (!['septic', 'leak', 'co'].includes(typeRaw)) {
+      return res.status(400).send('device_type must be "septic", "leak" or "co"');
     }
     // jeśli EUI to 16-znakowy hex – odkomentuj walidację jeśli potrzebna
     // if (!/^[0-9a-f]{16}$/i.test(serial)) {
@@ -1268,7 +1287,11 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     'name',
     'do_not_disturb',
     'sms_limit',
-    'sms_after_empty'
+    'sms_after_empty',
+// —— CO only:
+     'co_phone1',
+     'co_phone2',
+     'co_threshold_ppm'
   ]);
   const cols = [];
   const vals = [];
@@ -1278,17 +1301,44 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
       console.log(`❌ [PATCH /device/${serial}/params] Niedozwolone pole: ${k}`);
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-    if ((k === 'phone' || k === 'phone2' || k === 'tel_do_szambiarza') && typeof v !== 'string') {
-      return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
+    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
+      if (typeof v !== 'string') {
+        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+      }
+
+      const nv = normalisePhone(v.replace(/\s+/g, ''));
+      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
+      cols.push(`${k} = $${i++}`);
+      vals.push(nv);
+      continue;
     }
-        if (k === 'sms_after_empty' && typeof v !== 'boolean') {
-      return res.status(400).send('sms_after_empty must be boolean');
-    }
+
+   // BOOLEAN
+   if (k === 'sms_after_empty' || k === 'do_not_disturb') {
+     if (typeof v !== 'boolean') {
+       return res.status(400).send(`${k} must be boolean`);
+     }
+   }
+
     if (k === 'red_cm' || k === 'sms_limit') {
       const num = Number(v);
       if (Number.isNaN(num) || num < 0) {
         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
       }
+    }
+
+    // PRÓG CO (ppm)
+    if (k === 'co_threshold_ppm') {
+      const num = Number(v);
+      if (!Number.isInteger(num) || num <= 0) {
+        return res.status(400).send('co_threshold_ppm must be a positive integer');
+      }
+    }
+
+    // EMAIL
+    if (k === 'alert_email' && (typeof v !== 'string' || !v.includes('@'))) {
+      return res.status(400).send('Niepoprawny email');
     }
     cols.push(`${k} = $${i++}`);
     vals.push(v);

@@ -617,7 +617,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'tel_do_szambiarza',
     'street',
     'red_cm',
-    
+    'serie_number',
     'capacity',
     'abonament_expiry',
     'sms_limit',

@@ -625,6 +625,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'alert_email',
     'trigger_dist',
     'sms_after_empty',
+	'device_type',  
 	     // —— CO only:
      'co_phone1',
      'co_phone2',

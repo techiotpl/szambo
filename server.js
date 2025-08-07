@@ -618,6 +618,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'street',
     'red_cm',
     'serie_number',
+	   'serial_number',
     'capacity',
     'abonament_expiry',
     'sms_limit',

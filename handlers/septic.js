@@ -137,19 +137,22 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
       await client.query('BEGIN');
       // 1) zapisz empty_cm/empty_ts
       await client.query(
-        'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
+        'UPDATE devices SET empty_cm = $1::int, empty_ts = now() WHERE id = $2::uuid',
         [distance, dev.id]
       );
       // 2) wstaw wpis do empties i policz removed_m3 na bazie capacity z devices
       const ins = await client.query(
         `INSERT INTO empties (device_id, prev_cm, empty_cm, removed_m3, from_ts)
-         VALUES ($1, $2, $3,
-                 ROUND(
-                   (SELECT capacity::numeric FROM devices WHERE id = $1)
-                   * (1 - ($2::numeric / $3::numeric)),
-                   2
-                 ),
-                 now()
+         VALUES (
+           $1::uuid,
+           $2::int,
+           $3::int,
+           ROUND(
+             (SELECT capacity::numeric FROM devices WHERE id = $1::uuid)
+             * (1 - ($2::numeric / $3::numeric)),
+             2
+           ),
+           now()
          )
          RETURNING removed_m3`,
         [dev.id, dev.distance_cm, distance]
@@ -157,7 +160,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
       const removedM3 = ins.rows[0].removed_m3;
       // 3) zaktualizuj last_removed_m3
       await client.query(
-        'UPDATE devices SET last_removed_m3 = $1 WHERE id = $2',
+        'UPDATE devices SET last_removed_m3 = $1::numeric WHERE id = $2::uuid',
         [removedM3, dev.id]
       );
       await client.query('COMMIT');

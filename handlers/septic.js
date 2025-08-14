@@ -18,6 +18,10 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
 
+    const keys   = Object.keys(obj || {});
+  const issue0Only = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
+  const issue1Only = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
+
   // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
   if (obj.issue === 0 || obj.issue === '0') {
     const iso = new Date().toISOString();
@@ -37,7 +41,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
 
   // ───────────────────────────────── ISSUE = 1 ────────────────────────────
-  if (Object.keys(obj).length === 1 && (obj.issue === 1 || obj.issue === '1')) {
+  if (issue1Only) {
     const iso   = new Date().toISOString();
     const limit = Number(dev.sms_limit) || 0;
     const msg   = 'czujnik zabrudzony, kolejny pomiar może być błędny – sprawdź czujnik';
@@ -68,6 +72,24 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
     sendEvent({ serial: devEui, issue: 1, ts: iso });
     return;                                     // KONIEC dla issue=1
+  }
+
+   // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
+  // UWAGA: reagujemy TYLKO gdy to JEDYNE pole (brak distance/voltage).
+  if (issue0Only) {
+    const iso = new Date().toISOString();
+    await db.query(
+      `UPDATE devices
+          SET params = COALESCE(params,'{}'::jsonb)
+                       -- NIE nadpisujemy 'ts' (czas ostatniego poprawnego pomiaru)
+                       || jsonb_build_object('issue','0','issue_ts',$2::text)
+                       || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
+        WHERE id = $1`,
+      [dev.id, iso, snr]
+    );
+    // SSE: nie wysyłamy 'ts', żeby licznik 48h był liczony od ostatniego DOBREGO pomiaru
+    sendEvent({ serial: devEui, issue: 0, issue_ts: iso, snr });
+    return;
   }
 
   // ───────────────────────────────── ZWYKŁY POMIAR ─────────────────────────
@@ -104,7 +126,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
   const { rows:[row] } = await db.query(`
     UPDATE devices
-       SET params       = (coalesce(params,'{}') || $3::jsonb) - 'issue',
+      SET params       = (coalesce(params,'{}') - 'issue' - 'issue_ts') || $3::jsonb,
            distance_cm  = $2::int,
            last_measurement_ts = now(),
            trigger_measurement = FALSE,

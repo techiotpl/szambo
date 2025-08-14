@@ -18,6 +18,28 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
 
+    // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
+  // W tym wariancie z czujnika przychodzi samo { issue:0 } bez distance/voltage.
+  if (obj.issue === 0 || obj.issue === '0') {
+    const iso = new Date().toISOString();
+    // zapisujemy tylko znacznik "issue" + znacznik czasu (+ snr jeśli jest)
+    await db.query(
+      `UPDATE devices
+          SET params = COALESCE(params,'{}'::jsonb)
+                        || jsonb_build_object('ts',$2,'issue','0')
+                        || CASE WHEN $3::text IS NULL
+                                THEN '{}'::jsonb
+                                ELSE jsonb_build_object('snr',$3::text)
+                           END
+        WHERE id = $1`,
+      [dev.id, iso, snr]
+    );
+    // SSE do aplikacji – front podświetli "ostatni pomiar" na pomarańczowo
+    sendEvent({ serial: devEui, issue: 0, ts: iso, snr });
+    return; // koniec dla issue=0
+  }
+
+
   // ───────────────────────────────── ISSUE = 1 ────────────────────────────
   if (Object.keys(obj).length === 1 && (obj.issue === 1 || obj.issue === '1')) {
     const iso   = new Date().toISOString();
@@ -86,7 +108,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
   const { rows:[row] } = await db.query(`
     UPDATE devices
-       SET params       = coalesce(params,'{}') || $3::jsonb,
+       SET params       = (coalesce(params,'{}') || $3::jsonb) - 'issue',
            distance_cm  = $2::int,
            last_measurement_ts = now(),
            trigger_measurement = FALSE,

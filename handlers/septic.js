@@ -17,27 +17,11 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const devEui = dev.serial_number;           // EUI / serial
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
-
-    const keys   = Object.keys(obj || {});
+  const keys   = Object.keys(obj || {});
   const issue0Only = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
   const issue1Only = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
 
-  // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
-  if (obj.issue === 0 || obj.issue === '0') {
-    const iso = new Date().toISOString();
-    await db.query(
-      `UPDATE devices
-          SET params = COALESCE(params,'{}'::jsonb)
-                       -- NIE nadpisujemy 'ts' (czas ostatniego POPRAWNEGO pomiaru)
-                       || jsonb_build_object('issue','0','issue_ts',$2::text)
-                       || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
-        WHERE id = $1`,
-      [dev.id, iso, snr]
-    );
-    // SSE: nie wysyłamy 'ts', żeby 48h-bez-pomiaru nadal mogło zadziałać
-    sendEvent({ serial: devEui, issue: 0, issue_ts: iso, snr });
-    return;
-  }
+
 
 
   // ───────────────────────────────── ISSUE = 1 ────────────────────────────

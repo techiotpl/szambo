@@ -132,16 +132,41 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
   // ─────────────── DETEKCJA OPRÓŻNIENIA (flaga TRUE → FALSE) ──────────────
   if (dev.trigger_dist && !row.new_flag) {
-    await db.query(`
-      UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id=$2;
-      INSERT INTO empties (device_id, prev_cm, empty_cm, removed_m3, from_ts)
-      VALUES ($2, $3, $1,
-              ROUND(capacity * (1 - ($3::numeric / $1))::numeric,2),
-              now());
-      UPDATE devices
-         SET last_removed_m3 = ROUND(capacity * (1 - ($3::numeric / $1))::numeric,2)
-       WHERE id = $2;
-    `, [distance, dev.id, dev.distance_cm]);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      // 1) zapisz empty_cm/empty_ts
+      await client.query(
+        'UPDATE devices SET empty_cm = $1, empty_ts = now() WHERE id = $2',
+        [distance, dev.id]
+      );
+      // 2) wstaw wpis do empties i policz removed_m3 na bazie capacity z devices
+      const ins = await client.query(
+        `INSERT INTO empties (device_id, prev_cm, empty_cm, removed_m3, from_ts)
+         VALUES ($1, $2, $3,
+                 ROUND(
+                   (SELECT capacity::numeric FROM devices WHERE id = $1)
+                   * (1 - ($2::numeric / $3::numeric)),
+                   2
+                 ),
+                 now()
+         )
+         RETURNING removed_m3`,
+        [dev.id, dev.distance_cm, distance]
+      );
+      const removedM3 = ins.rows[0].removed_m3;
+      // 3) zaktualizuj last_removed_m3
+      await client.query(
+        'UPDATE devices SET last_removed_m3 = $1 WHERE id = $2',
+        [removedM3, dev.id]
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
 
     // opcjonalny SMS „opróżniono”
     if (dev.sms_after_empty && row.sms_limit > 0 && dev.phone) {

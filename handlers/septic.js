@@ -26,10 +26,10 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
     await db.query(
       `UPDATE devices
           SET params = COALESCE(params,'{}'::jsonb)
-                        || jsonb_build_object('ts',$2,'issue','0')
-                        || CASE WHEN $3::text IS NULL
+                        || jsonb_build_object('ts', $2::text, 'issue', '0')
+                        || CASE WHEN $3 IS NULL
                                 THEN '{}'::jsonb
-                                ELSE jsonb_build_object('snr',$3::text)
+                                ELSE jsonb_build_object('snr', ($3)::text)
                            END
         WHERE id = $1`,
       [dev.id, iso, snr]

@@ -18,25 +18,21 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
 
-    // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
-  // W tym wariancie z czujnika przychodzi samo { issue:0 } bez distance/voltage.
+  // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
   if (obj.issue === 0 || obj.issue === '0') {
     const iso = new Date().toISOString();
-    // zapisujemy tylko znacznik "issue" + znacznik czasu (+ snr jeśli jest)
     await db.query(
       `UPDATE devices
           SET params = COALESCE(params,'{}'::jsonb)
-                        || jsonb_build_object('ts', $2::text, 'issue', '0')
-                        || CASE WHEN $3 IS NULL
-                                THEN '{}'::jsonb
-                                ELSE jsonb_build_object('snr', ($3)::text)
-                           END
+                       -- NIE nadpisujemy 'ts' (czas ostatniego POPRAWNEGO pomiaru)
+                       || jsonb_build_object('issue','0','issue_ts',$2::text)
+                       || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
         WHERE id = $1`,
       [dev.id, iso, snr]
     );
-    // SSE do aplikacji – front podświetli "ostatni pomiar" na pomarańczowo
-    sendEvent({ serial: devEui, issue: 0, ts: iso, snr });
-    return; // koniec dla issue=0
+    // SSE: nie wysyłamy 'ts', żeby 48h-bez-pomiaru nadal mogło zadziałać
+    sendEvent({ serial: devEui, issue: 0, issue_ts: iso, snr });
+    return;
   }
 
 
@@ -86,8 +82,8 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   // zapisuj pomiar zawsze, jeżeli mamy distance
   if (distance !== null) {
     await db.query(
-      'INSERT INTO measurements (device_serial, distance_cm, snr) VALUES ($1,$2,$3)',
-      [devEui, distance, snr]
+      'INSERT INTO measurements (device_serial, distance_cm, ts) VALUES ($1,$2, now())',
+      [devEui, distance]
     );
   }
 

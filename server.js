@@ -1266,6 +1266,7 @@ app.get('/device/:serial_number/vars', auth, consentGuard, async (req, res) => {
       (params ->> 'voltage')::numeric   AS voltage,
       (params ->> 'snr')::numeric       AS snr,
       params ->> 'ts'                   AS ts,
+	  params ->> 'ts_seen'              AS ts_seen,
 	  (params ->> 'issue')              AS issue,   -- ← po to aby pokazac   znak zapytania kiedy para
    (params ->> 'issue_ts')           AS issue_ts,
       empty_cm,

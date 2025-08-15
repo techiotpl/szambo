@@ -225,13 +225,15 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
       }
       catch (e) { console.error('SMS err', e); }
     }
-    // SMS do szambiarza
     // SMS do szambiarza (spróbuj, jeśli są jeszcze SMS-y)
     if (row.tel_do_szambiarza) {
-      const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie.`;
-            try {
-        await sendSmsWithQuota(db, dev.user_id, szam, msg2, 'szambiarz');
-      catch (e) { /* ignore */ }
+      const szam = normalisePhone(row.tel_do_szambiarza);
+      if (szam) {
+        const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie.`;
+        try {
+          await sendSmsWithQuota(db, dev.user_id, szam, msg2, 'szambiarz');
+        } catch (e) { /* ignore */ }
+      }
     }
 
 

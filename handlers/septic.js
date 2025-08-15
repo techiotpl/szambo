@@ -17,19 +17,29 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const devEui = dev.serial_number;           // EUI / serial
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
-  const keys   = Object.keys(obj || {});
-  const issue0Only = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
-  const issue1Only = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
 
+  const keys        = Object.keys(obj || {});
+  const issue0Only  = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
+  const issue1Only  = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
+  const nowIso      = new Date().toISOString();
 
-
-
-  // ───────────────────────────────── ISSUE = 1 ────────────────────────────
+  // ───────────────────────────── ISSUE = 1 (czujnik zabrudzony) ─────────────────────────────
+  // To też jest uplink → aktualizujemy ts_seen, żeby UI/48h się odświeżyło.
   if (issue1Only) {
-    const iso   = new Date().toISOString();
     const limit = Number(dev.sms_limit) || 0;
     const msg   = 'czujnik zabrudzony, kolejny pomiar może być błędny – sprawdź czujnik';
 
+    // 1) zapisz status + ts_seen (+ snr) do params
+    await db.query(
+      `UPDATE devices
+          SET params = COALESCE(params,'{}'::jsonb)
+                       || jsonb_build_object('issue','1','issue_ts',$2::text,'ts_seen',$2::text)
+                       || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
+        WHERE id = $1`,
+      [dev.id, nowIso, snr]
+    );
+
+    // 2) powiadomienia
     let smsSent = false;
     if (dev.phone && limit > 0) {
       const num = normalisePhone(dev.phone);
@@ -37,10 +47,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
         try {
           await sendSMS(num, msg, 'issue');
           smsSent = true;
-          await db.query(
-            'UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1',
-            [dev.id]
-          );
+          await db.query('UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1', [dev.id]);
         } catch (err) { console.error('❌ issue SMS err:', err); }
       }
     }
@@ -50,29 +57,28 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
       catch (err) { console.error('❌ issue mail err:', err); }
     }
 
-    // mail wewnętrzny
-    try { await sendEmail('biuro@techiot.pl', `ISSUE(1) – ${devEui}`, `<p>${iso}</p>`); }
+    // mail wewnętrzny (opcjonalny)
+    try { await sendEmail('biuro@techiot.pl', `ISSUE(1) – ${devEui}`, `<p>${nowIso}</p>`); }
     catch (err) { /* ignore */ }
 
-    sendEvent({ serial: devEui, issue: 1, ts: iso });
-    return;                                     // KONIEC dla issue=1
+    // 3) SSE – podajemy ts_seen (i ts dla kompatybilności z frontem)
+    sendEvent({ serial: devEui, issue: 1, issue_ts: nowIso, ts_seen: nowIso, ts: nowIso, snr });
+    return;
   }
 
-   // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
-  // UWAGA: reagujemy TYLKO gdy to JEDYNE pole (brak distance/voltage).
+  // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
+  // Reagujemy TYLKO, gdy to jedyne pole (brak distance/voltage).
   if (issue0Only) {
-    const iso = new Date().toISOString();
     await db.query(
       `UPDATE devices
           SET params = COALESCE(params,'{}'::jsonb)
-                       -- NIE nadpisujemy 'ts' (czas ostatniego poprawnego pomiaru)
-                       || jsonb_build_object('issue','0','issue_ts',$2::text)
+                       || jsonb_build_object('issue','0','issue_ts',$2::text,'ts_seen',$2::text)
                        || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
         WHERE id = $1`,
-      [dev.id, iso, snr]
+      [dev.id, nowIso, snr]
     );
-    // SSE: nie wysyłamy 'ts', żeby licznik 48h był liczony od ostatniego DOBREGO pomiaru
-    sendEvent({ serial: devEui, issue: 0, issue_ts: iso, snr });
+    // SSE – odśwież UI i 48h
+    sendEvent({ serial: devEui, issue: 0, issue_ts: nowIso, ts_seen: nowIso, ts: nowIso, snr });
     return;
   }
 
@@ -80,12 +86,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const distance = obj.distance ?? null;        // cm
   const voltage  = obj.voltage  ?? null;        // V
 
-  // blokada 23-6 (do_not_disturb)
-  const hour = moment().tz('Europe/Warsaw').hour();
-  const dnd  = dev.do_not_disturb === true || dev.do_not_disturb === 't';
-  const isNight = (hour >= 23 || hour < 6);
-
-  // zapisuj pomiar zawsze, jeżeli mamy distance
+  // Jeżeli mamy odległość → zapisz punkt w measurements (z TS po stronie DB)
   if (distance !== null) {
     await db.query(
       'INSERT INTO measurements (device_serial, distance_cm, ts) VALUES ($1,$2, now())',
@@ -93,32 +94,56 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
     );
   }
 
+  // blokada 23-6 (do_not_disturb)
+  const hour    = moment().tz('Europe/Warsaw').hour();
+  const dnd     = dev.do_not_disturb === true || dev.do_not_disturb === 't';
+  const isNight = (hour >= 23 || hour < 6);
+
+  // DND: zaktualizuj tylko „stan bieżący” (params z ts/ts_seen), wyślij SSE i wyjdź.
   if (dnd && isNight) {
-    sendEvent({ serial: devEui, distance, voltage, snr, ts: new Date().toISOString() });
-    return;                                     // DND: nic więcej nie robimy
+    const paramsNow = {
+      distance,
+      snr,
+      voltage,
+      ts: nowIso,        // ostatni „dobry” – tu także dobry
+      ts_seen: nowIso    // „ostatnio widziany uplink”
+    };
+    await db.query(
+      `UPDATE devices
+          SET params = (COALESCE(params,'{}') - 'issue' - 'issue_ts') || $2::jsonb
+        WHERE id = $1`,
+      [dev.id, JSON.stringify(paramsNow)]
+    );
+    sendEvent({ serial: devEui, distance, voltage, snr, ts: nowIso, ts_seen: nowIso });
+    return; // DND: nie liczymy progów, nie wysyłamy alertów
   }
 
-  if (distance === null) return;                // brak odległości → stop
+  // Jeżeli mimo wszystko brak odległości → nic więcej nie robimy
+  if (distance === null) {
+    // (gdyby kiedyś przyszło voltage bez distance – nie countujemy progów itd.)
+    return;
+  }
 
   // aktualizacja devices + obliczenie flagi trigger_dist
   const varsToSave = {
     distance,
     snr,
     voltage,
-    ts: new Date().toISOString()
+    ts: nowIso,        // ostatni DOBRY
+    ts_seen: nowIso    // ostatnio widziany uplink (tu też DOBRY)
   };
 
   const { rows:[row] } = await db.query(`
     UPDATE devices
-      SET params       = (coalesce(params,'{}') - 'issue' - 'issue_ts') || $3::jsonb,
-           distance_cm  = $2::int,
+       SET params              = (COALESCE(params,'{}') - 'issue' - 'issue_ts') || $3::jsonb,
+           distance_cm         = $2::int,
            last_measurement_ts = now(),
            trigger_measurement = FALSE,
-           trigger_dist = CASE
-                            WHEN $2::int <= red_cm THEN TRUE
-                            WHEN $2::int >= red_cm THEN FALSE
-                            ELSE trigger_dist
-                          END
+           trigger_dist        = CASE
+                                   WHEN $2::int <= red_cm THEN TRUE
+                                   WHEN $2::int >= red_cm THEN FALSE
+                                   ELSE trigger_dist
+                                 END
      WHERE id = $1
      RETURNING trigger_dist AS new_flag,
                red_cm, sms_limit, phone, phone2, tel_do_szambiarza,
@@ -135,11 +160,13 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
     const client = await db.connect();
     try {
       await client.query('BEGIN');
+
       // 1) zapisz empty_cm/empty_ts
       await client.query(
         'UPDATE devices SET empty_cm = $1::int, empty_ts = now() WHERE id = $2::uuid',
         [distance, dev.id]
       );
+
       // 2) wstaw wpis do empties i policz removed_m3 na bazie capacity z devices
       const ins = await client.query(
         `INSERT INTO empties (device_id, prev_cm, empty_cm, removed_m3, from_ts)
@@ -158,11 +185,13 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
         [dev.id, dev.distance_cm, distance]
       );
       const removedM3 = ins.rows[0].removed_m3;
+
       // 3) zaktualizuj last_removed_m3
       await client.query(
         'UPDATE devices SET last_removed_m3 = $1::numeric WHERE id = $2::uuid',
         [removedM3, dev.id]
       );
+
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -214,7 +243,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   }
 
   // ─────────────── SSE do front-endu ──────────────────────────────────────
-  sendEvent({ serial: devEui, distance, voltage, snr, ts: varsToSave.ts });
+  sendEvent({ serial: devEui, distance, voltage, snr, ts: nowIso, ts_seen: nowIso });
 
   return;   // wszystko OK
 };

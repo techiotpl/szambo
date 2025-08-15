@@ -278,6 +278,26 @@ BEGIN
   END IF;
 END$$;
 
+
+-- ───────── GLOBALNY LIMIT SMS NA UŻYTKOWNIKA ─────────
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS sms_limit INT DEFAULT 30,
+  ADD COLUMN IF NOT EXISTS abonament_expiry DATE;
+
+-- Jednorazowe wypełnienie z devices (max z urządzeń, żeby nic nie „uciąć”):
+UPDATE users u
+SET sms_limit = x.sms_limit,
+    abonament_expiry = COALESCE(u.abonament_expiry, x.abonament_expiry)
+FROM (
+  SELECT user_id,
+         COALESCE(MAX(sms_limit), 30) AS sms_limit,
+         MAX(abonament_expiry)        AS abonament_expiry
+  FROM devices
+  GROUP BY user_id
+) x
+WHERE u.id = x.user_id;
+
+
 `; 
 
 
@@ -383,6 +403,37 @@ function normalisePhone(p) {
   if (!p || p.length < 9) return null;
   return p.startsWith('+48') ? p : '+48' + p;
 }
+
+// konsumuje z puli użytkownika atomowo; zwraca nową wartość, albo null gdy brak środków
+async function consumeSms(db, userId, count = 1) {
+  const q = `
+    UPDATE users
+       SET sms_limit = sms_limit - $2
+     WHERE id = $1::uuid
+       AND sms_limit >= $2
+     RETURNING sms_limit`;
+  const r = await db.query(q, [userId, count]);
+  return r.rowCount ? r.rows[0].sms_limit : null;
+}
+
+// próbuje wysłać SMS **i** pobrać 1 z puli; gdy brak środków → nic nie wysyła i zwraca false
+async function sendSmsWithQuota(db, userId, phone, msg, tag='') {
+  const left = await consumeSms(db, userId, 1);
+  if (left === null) {
+    console.log(`⛔ Brak SMS w puli user=${userId}, nie wysyłam (${tag})`);
+    return false;
+  }
+  try {
+    await sendSMS(phone, msg, tag);
+    return true;
+  } catch (e) {
+    // zwrotka: oddaj kredyt z powrotem (best effort)
+    await db.query('UPDATE users SET sms_limit = sms_limit + 1 WHERE id = $1::uuid', [userId]).catch(()=>{});
+    throw e;
+  }
+}
+
+
 
 async function sendSMS(phone, msg, tag = '') {
   const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
@@ -576,20 +627,27 @@ app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const { serial } = req.params;
   const q = `
     SELECT
-      name,
-      phone, phone2, tel_do_szambiarza, capacity, alert_email,
-      red_cm, sms_limit, do_not_disturb,
-      empty_cm, empty_ts, abonament_expiry, street, sms_after_empty,
+      d.name,
+      d.phone, d.phone2, d.tel_do_szambiarza, d.capacity, d.alert_email,
+      d.red_cm,
+      u.sms_limit                AS sms_limit,          -- globalny limit użytkownika
+      d.do_not_disturb,
+      d.empty_cm, d.empty_ts,
+      u.abonament_expiry         AS abonament_expiry,   -- globalna data
+      d.street, d.sms_after_empty,
       -- pola CO:
-      co_phone1, co_phone2, co_threshold_ppm,
+      d.co_phone1, d.co_phone2, d.co_threshold_ppm,
       -- statusy informacyjne:
-      co_status, co_ppm
-      FROM devices
-     WHERE serial_number = $1`;
+      d.co_status, d.co_ppm
+    FROM devices d
+    JOIN users   u ON u.id = d.user_id
+    WHERE d.serial_number = $1
+    LIMIT 1`;
   const { rows } = await db.query(q, [serial]);
   if (!rows.length) return res.status(404).send('Not found');
   res.json(rows[0]);
 });
+
 
 // GET /device/:serial/measurements – ostatnie ≤10 rekordów
 app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => {
@@ -605,12 +663,15 @@ app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PATCH /admin/device/:serial/params – zapis nowych parametrów (walidacja kluczy)
-// Ten endpoint dostępny tylko dla admina (adminOnly).
+// PATCH /admin/device/:serial/params – zapis parametrów (ADMIN)
+//  • pola globalne (sms_limit, abonament_expiry) idą do tabeli users
+//  • reszta pól aktualizuje devices
 // ─────────────────────────────────────────────────────────────────────────────
 app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   const { serial } = req.params;
-  const body = req.body;
+  const body = req.body || {};
+
+  // Dozwolone pola od admina
   const allowedFields = new Set([
     'phone',
     'phone2',
@@ -618,95 +679,171 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'street',
     'red_cm',
     'serie_number',
-	   'serial_number',
+    'serial_number',
     'capacity',
-    'abonament_expiry',
-    'sms_limit',
+    'abonament_expiry',   // → USERS
+    'sms_limit',          // → USERS
     'alert_email',
     'trigger_dist',
     'sms_after_empty',
-	'device_type',  
-	     // —— CO only:
-     'co_phone1',
-     'co_phone2',
-     'co_threshold_ppm'
+    'device_type',
+    // —— CO only:
+    'co_phone1',
+    'co_phone2',
+    'co_threshold_ppm'
   ]);
-  const cols = [];
-  const vals = [];
-  let i = 1;
-  for (const [k, v] of Object.entries(body)) {
-    if (!allowedFields.has(k)) {
-      console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pole: ${k}`);
-      return res.status(400).send(`Niedozwolone pole: ${k}`);
+
+  // 0) wstępna walidacja kluczy
+  const unknown = Object.keys(body).filter(k => !allowedFields.has(k));
+  if (unknown.length) {
+    console.log(`❌ [PATCH /admin/device/${serial}/params] Niedozwolone pola: ${unknown.join(', ')}`);
+    return res.status(400).send(`Niedozwolone pola: ${unknown.join(', ')}`);
+  }
+
+  try {
+    // 1) Pobierz user_id po numerze urządzenia (przyda się do update users)
+    const { rows: devOwner } = await db.query(
+      'SELECT id, user_id FROM devices WHERE serial_number = $1 LIMIT 1',
+      [serial]
+    );
+    if (!devOwner.length) {
+      return res.status(404).send('Device not found');
     }
-    // TELEFONY → normalizacja do +48..., zapis tylko znormalizowanej wartości
-    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
-      // pozwól na czyszczenie numeru przez "", null → ustawiamy NULL w DB
-      if (v == null || String(v).trim() === '') {
-        cols.push(`${k} = $${i++}`);
-        vals.push(null);
+    const deviceId = devOwner[0].id;
+    const userId   = devOwner[0].user_id;
+
+    // 2) Najpierw globalne pola na USERS (sms_limit, abonament_expiry)
+    const wantsGlobalLimit  = Object.prototype.hasOwnProperty.call(body, 'sms_limit');
+    const wantsGlobalExpiry = Object.prototype.hasOwnProperty.call(body, 'abonament_expiry');
+
+    if (wantsGlobalLimit || wantsGlobalExpiry) {
+      const setsU = [];
+      const valsU = [];
+      let j = 1;
+
+      if (wantsGlobalLimit) {
+        const num = Number(body.sms_limit);
+        if (!Number.isInteger(num) || num < 0) {
+          return res.status(400).send('sms_limit must be a non-negative integer');
+        }
+        setsU.push(`sms_limit = $${j++}`);
+        valsU.push(num);
+        delete body.sms_limit; // nie aktualizuj tego już w devices
+      }
+
+      if (wantsGlobalExpiry) {
+        // przyjmujemy YYYY-MM-DD; rzutowanie pozostawiamy PG
+        setsU.push(`abonament_expiry = $${j++}`);
+        valsU.push(body.abonament_expiry);
+        delete body.abonament_expiry; // nie aktualizuj tego już w devices
+      }
+
+      if (setsU.length) {
+        valsU.push(userId);
+        await db.query(
+          `UPDATE users SET ${setsU.join(', ')} WHERE id = $${j}`,
+          valsU
+        );
+        console.log(`✅ [ADMIN] users updated for user=${userId} (${setsU.join(', ')})`);
+      }
+    }
+
+    // 3) Zbuduj UPDATE dla DEVICES (pomijamy już skonsumowane klucze)
+    const cols = [];
+    const vals = [];
+    let i = 1;
+
+    const pushCol = (k, v) => { cols.push(`${k} = $${i++}`); vals.push(v); };
+
+    for (const [k, v] of Object.entries(body)) {
+      // TELEFONY → normalizacja do +48..., pozwól wyczyścić przez ""/null
+      if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
+        if (v == null || String(v).trim() === '') { pushCol(k, null); continue; }
+        if (typeof v !== 'string') return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+        const nv = normalisePhone(v.replace(/\s+/g, ''));
+        if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
+        pushCol(k, nv);
         continue;
       }
-      if (typeof v !== 'string') {
-        return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
+
+      // BOOLEAN
+      if (k === 'sms_after_empty' || k === 'trigger_dist') {
+        if (typeof v !== 'boolean') return res.status(400).send(`${k} must be boolean`);
+        pushCol(k, v);
+        continue;
       }
-      const nv = normalisePhone(v.replace(/\s+/g, ''));
-      if (!nv) return res.status(400).send(`Niepoprawny numer telefonu: ${k}`);
-      cols.push(`${k} = $${i++}`);
-      vals.push(nv);
-      continue;
+
+      // LICZBY całkowite/nieujemne
+      if (k === 'red_cm') {
+        const num = Number(v);
+        if (!Number.isInteger(num) || num < 0) {
+          return res.status(400).send('red_cm must be a non-negative integer');
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      if (k === 'capacity') {
+        const num = Number(v);
+        if (!Number.isInteger(num) || num <= 0) {
+          return res.status(400).send('capacity must be a positive integer');
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      if (k === 'co_threshold_ppm') {
+        const num = Number(v);
+        if (!Number.isInteger(num) || num <= 0) {
+          return res.status(400).send('co_threshold_ppm must be a positive integer');
+        }
+        pushCol(k, num);
+        continue;
+      }
+
+      // E-MAIL – pozwól wyczyścić
+      if (k === 'alert_email') {
+        if (v == null || String(v).trim() === '') { pushCol(k, null); continue; }
+        if (typeof v !== 'string' || !v.includes('@')) {
+          return res.status(400).send('Niepoprawny email');
+        }
+        pushCol(k, v.trim());
+        continue;
+      }
+
+      // STRINGI
+      if (k === 'street' || k === 'serial_number' || k === 'serie_number' || k === 'device_type') {
+        if (v == null) { pushCol(k, null); continue; }
+        if (typeof v !== 'string' || v.trim().length === 0) {
+          return res.status(400).send(`invalid value for ${k}`);
+        }
+        pushCol(k, v.trim());
+        continue;
+      }
+
+      // fallback – jeśli coś pominęliśmy
+      pushCol(k, v);
     }
 
-
-    if (k === 'sms_after_empty' || k === 'trigger_dist') {
-      if (typeof v !== 'boolean') {
-        return res.status(400).send(`${k} must be boolean`);
-      }
+    // 4) Jeżeli były tylko pola globalne (users) → i tak zwróć 200
+    if (!cols.length) {
+      console.log(`ℹ️ [PATCH /admin/device/${serial}/params] Only users fields updated (no devices change)`);
+      return res.sendStatus(200);
     }
 
-     // LICZBY całkowite/nieujemne
-     if (k === 'red_cm' || k === 'sms_limit') {
-       const num = Number(v);
-       if (Number.isNaN(num) || num < 0) {
-         return res.status(400).send(`Niepoprawna wartość dla pola: ${k}`);
-       }
-     }
-
-     // PRÓG CO (ppm)
-     if (k === 'co_threshold_ppm') {
-       const num = Number(v);
-       if (!Number.isInteger(num) || num <= 0) {
-         return res.status(400).send('co_threshold_ppm must be a positive integer');
-       }
-     }
-
-    if (k === 'alert_email') {
-      // czyszczenie e-maila: ""/null → NULL
-      if (v == null || String(v).trim() === '') {
-        cols.push(`${k} = $${i++}`); vals.push(null); continue;
-      }
-      if (typeof v !== 'string' || !v.includes('@')) {
-        return res.status(400).send('Niepoprawny email');
-      }
-    }
-    cols.push(`${k} = $${i++}`);
-    vals.push(v);
-  }
-  if (!cols.length) {
-    console.log(`❌ [PATCH /admin/device/${serial}/params] Brak danych do zaktualizowania`);
-    return res.status(400).send('Brak danych do aktualizacji');
-  }
-  vals.push(serial);
-  const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
-  try {
+    // 5) Aktualizacja devices
+    vals.push(serial);
+    const q = `UPDATE devices SET ${cols.join(', ')} WHERE serial_number = $${i}`;
     await db.query(q, vals);
-    console.log(`✅ [PATCH /admin/device/${serial}/params] Zaktualizowano: ${JSON.stringify(body)}`);
+
+    console.log(`✅ [PATCH /admin/device/${serial}/params] Zaktualizowano devices: ${JSON.stringify(body)}`);
     return res.sendStatus(200);
   } catch (err) {
-    console.error(`❌ [PATCH /admin/device/${serial}/params] Błąd bazy:`, err);
+    console.error(`❌ [PATCH /admin/device/${serial}/params] Błąd:`, err);
     return res.status(500).send('Błąd serwera');
   }
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /login — logowanie
@@ -1242,7 +1379,7 @@ app.post('/uplink', async (req, res) => {
 
     // 2) delegujemy całą logikę do modułu w handlers/
     await handler.handleUplink(
-      { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment },
+      { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment,sendSmsWithQuota, consumeSms  },
       dev,
       req.body
     );

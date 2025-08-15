@@ -683,6 +683,8 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'capacity',
     'abonament_expiry',   // → USERS
     'sms_limit',          // → USERS
+	      'u.abonament_expiry',   // → USERS
+    'u.sms_limit',          // → USERS
     'alert_email',
     'trigger_dist',
     'sms_after_empty',

@@ -11,7 +11,8 @@
 module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const {
     db, sendSMS, sendEmail, sendEvent,
-    normalisePhone, moment
+    normalisePhone, moment,
+    sendSmsWithQuota, consumeSms
   } = utils;
 
   const devEui = dev.serial_number;           // EUI / serial
@@ -26,7 +27,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   // ───────────────────────────── ISSUE = 1 (czujnik zabrudzony) ─────────────────────────────
   // To też jest uplink → aktualizujemy ts_seen, żeby UI/48h się odświeżyło.
   if (issue1Only) {
-    const limit = Number(dev.sms_limit) || 0;
+    
     const msg   = 'czujnik zabrudzony, kolejny pomiar może być błędny – sprawdź czujnik';
 
     // 1) zapisz status + ts_seen (+ snr) do params
@@ -41,13 +42,11 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
 
     // 2) powiadomienia
     let smsSent = false;
-    if (dev.phone && limit > 0) {
+    if (dev.phone) {
       const num = normalisePhone(dev.phone);
       if (num) {
         try {
-          await sendSMS(num, msg, 'issue');
-          smsSent = true;
-          await db.query('UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1', [dev.id]);
+smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
         } catch (err) { console.error('❌ issue SMS err:', err); }
       }
     }
@@ -201,11 +200,10 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
     }
 
     // opcjonalny SMS „opróżniono”
-    if (dev.sms_after_empty && row.sms_limit > 0 && dev.phone) {
+    if (dev.sms_after_empty && dev.phone) {
       const num = normalisePhone(dev.phone);
       try {
-        await sendSMS(num, '✅ Zbiornik opróżniony (maks. 4 h temu).', 'after_empty');
-        await db.query('UPDATE devices SET sms_limit = sms_limit - 1 WHERE id=$1',[dev.id]);
+    await sendSmsWithQuota(db, dev.user_id, num, '✅ Zbiornik opróżniony (maks. 4 h temu).', 'after_empty');
       } catch (e) { /* ignore */ }
     }
   }
@@ -217,22 +215,25 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
     if (row.phone2) toNumbers.push(normalisePhone(row.phone2));
 
     // SMS-y (jeśli mamy limit)
-    let used = 0;
+   
     const msgBase = `⚠️ Poziom w zbiorniku ${distance} cm (próg ${row.red_cm} cm)`;
     for (const num of toNumbers) {
-      if (row.sms_limit - used <= 0) break;
-      try { await sendSMS(num, msgBase, 'threshold'); used++; }
+      if (!num) continue;
+      try {
+        const ok = await sendSmsWithQuota(db, dev.user_id, num, msgBase, 'threshold');
+        if (!ok) break; // zabrakło SMS-ów w globalnej puli
+      }
       catch (e) { console.error('SMS err', e); }
     }
     // SMS do szambiarza
-    if (row.tel_do_szambiarza && row.sms_limit - used > 0) {
-      const szam = normalisePhone(row.tel_do_szambiarza);
+    // SMS do szambiarza (spróbuj, jeśli są jeszcze SMS-y)
+    if (row.tel_do_szambiarza) {
       const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie.`;
-      try { await sendSMS(szam, msg2, 'szambiarz'); used++; }
+            try {
+        await sendSmsWithQuota(db, dev.user_id, szam, msg2, 'szambiarz');
       catch (e) { /* ignore */ }
     }
-    if (used)
-      await db.query('UPDATE devices SET sms_limit = sms_limit - $1 WHERE id=$2',[used, dev.id]);
+
 
     // e-mail
     if (row.alert_email) {

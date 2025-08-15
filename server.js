@@ -495,7 +495,7 @@ function adminOnly(req, res, next) {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
-    SELECT u.id, u.email, u.name,
+    SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json

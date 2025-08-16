@@ -2,10 +2,13 @@
 const axios = require('axios');
 
 module.exports.handleUplink = async function (utils, dev, body) {
-  const { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment } = utils;
+  // korzystamy z globalnej puli SMS (tak jak w septic.js)
+  const { db, sendSmsWithQuota, sendEmail, sendEvent, normalisePhone, moment } = utils;
+  
 
   const obj = body.object || {};
   const now = moment();
+  const snr = body.rxInfo?.[0]?.snr ?? null;
 
   // ---- 1) Parsowanie statusu i baterii ---------------------------------
   let leak = false;
@@ -75,60 +78,44 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   }
 
-  // ---- 3) Akcja tylko przy zmianie normal → leak ------------------------
-  if (changed) {
-    console.log(`[LEAK] CHANGE ${dev.serial_number}: ${prev} → ${leak}`);
-  }
-
   if (changed && leak === true) {
     try {
-      // a) Znajdź „dawcę” pakietu SMS (preferuj septic, z dodatnim sms_limit)
-      const donorSql = `
-        SELECT id, device_type, phone, sms_limit
-          FROM devices
-         WHERE user_id = $1
-           AND sms_limit > 0
-         ORDER BY CASE WHEN device_type = 'septic' THEN 0 ELSE 1 END, created_at
-         LIMIT 1`;
-      const { rows: donors } = await db.query(donorSql, [dev.user_id]);
+      // a) numery przypisane DO TEGO URZĄDZENIA
+      const targets = []
+        .concat(dev.phone ? [normalisePhone(dev.phone)] : [])
+        .concat(dev.phone2 ? [normalisePhone(dev.phone2)] : [])
+        .filter(Boolean);
 
-      if (!donors.length) {
-        console.log(`[LEAK] SKIP SMS/CALL – brak urządzeń z dodatnim sms_limit u user_id=${dev.user_id}`);
+      if (!targets.length) {
+        console.log(`[LEAK] SKIP SMS/CALL – brak numerów w device ${dev.id}`);
       } else {
-        const donor = donors[0];
-        const phone = donor.phone ? normalisePhone(donor.phone) : null;
+        const devName = (dev.name && String(dev.name).trim().length)
+          ? String(dev.name).trim()
+          : dev.serial_number;
+        const smsMsg = `Wykryto zalanie – ${devName}. Sprawdź natychmiast!`;
 
-        if (!phone) {
-          console.log(`[LEAK] SKIP SMS/CALL – dawca ${donor.id} nie ma numeru telefonu`);
-        } else {
-          // b) Tekst i nazwa urządzenia
-          const devName = (dev.name && String(dev.name).trim().length)
-            ? String(dev.name).trim()
-            : dev.serial_number;
-          const smsMsg = `Wykryto zalanie – ${devName}. Sprawdź natychmiast!`;
-
-          // c) SMS + dekrement u dawcy
-          let smsSent = false;
+        let anySmsSent = false;
+        for (const num of targets) {
           try {
-            await sendSMS(phone, smsMsg, 'leak');
-            await db.query('UPDATE devices SET sms_limit = sms_limit - 1 WHERE id = $1', [donor.id]);
-            await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
-            smsSent = true;
-            console.log(`[LEAK] SMS sent via donor ${donor.id} (type=${donor.device_type}) → ${phone}`);
+            const ok = await sendSmsWithQuota(db, dev.user_id, num, smsMsg, 'leak');
+            if (ok) {
+              anySmsSent = true;
+              console.log(`[LEAK] SMS OK user=${dev.user_id} to=${num}`);
+            } else {
+              console.log(`[LEAK] brak globalnej puli SMS – przerywam wysyłkę`);
+              break; // globalna pula wyczerpana
+            }
           } catch (e) {
             console.error('[LEAK] SMS error:', e);
           }
+        }
 
-          // d) CALL (Twilio) – tylko jeśli SMS poszedł OK
-          if (smsSent) {
-            const callOk = await sendTwilioCall(phone);
-            if (callOk) {
-              // (opcjonalnie) znacznik ostatniego alertu
-              await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
-            }
-          } else {
-            console.log('[LEAK] CALL skipped – SMS nie został wysłany');
-          }
+        if (anySmsSent) {
+          await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
+          // pojedynczy CALL do pierwszego numeru
+          await sendTwilioCall(targets[0]);
+        } else {
+          console.log('[LEAK] CALL pominięty – żaden SMS nie poszedł');
         }
       }
     } catch (e) {
@@ -164,6 +151,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
     serial: dev.serial_number,
     leak,
     battery_v: battV,
+      snr,
     ts: now.toISOString()
   });
 };

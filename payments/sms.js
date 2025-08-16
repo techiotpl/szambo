@@ -26,8 +26,9 @@ require('dotenv').config();
 // CENNIK (GROSZE = integer)
 // ───────────────────────────────────────────────────────────────────────────
 
-// Cena dla pojedynczego urządzenia (endpoint /sms/orders)
-const PRICE_SINGLE_DEVICE_GROSZE = 100; // 1,00 zł (zmień np. na 5999 dla 59,99 zł)
++// Cena dla pojedynczego urządzenia (endpoint /sms/orders)
++// ← USTAW REALNĄ: 50,00 zł = 5000
++const PRICE_SINGLE_DEVICE_GROSZE = 5000; // 50,00 zł
 
 // Ceny per typ urządzenia (endpoint /sms/orders/for-user)
 const PRICES_GROSZE = {
@@ -35,6 +36,9 @@ const PRICES_GROSZE = {
   leak:   200,  // 2,00 zł
   co:     300   // 3,00 zł
 };
+
+// Ile SMS dodać po udanej płatności (top-up na konto – tabela users)
+const SMS_TOPUP_PER_ORDER = 30;
 
 // Formatowanie groszy do stringa "xx,yy zł"
 function formatPLN(grosze) {
@@ -76,6 +80,9 @@ module.exports = (app, db, auth) => {
       const amountGrosze = PRICE_SINGLE_DEVICE_GROSZE;
       const currency     = 'PLN';
       const sessionId    = `SMS_${device.id}_${Date.now()}`;
+
+            // LOG: pojedyncze urządzenie
+      console.log(`[P24 register:/sms/orders] user=${req.user.email} device_serial=${serial} name="${device.name}" amount=${formatPLN(amountGrosze)}`);
 
       const posId      = process.env.P24_POS_ID?.trim();
       const apiKey     = process.env.P24_API_KEY?.trim();
@@ -170,6 +177,13 @@ module.exports = (app, db, auth) => {
 
       const currency  = 'PLN';
       const sessionId = `SMS_USER_${userId}_${Date.now()}`;
+
+           // LOG: zamówienie „na konto”
+      console.log(
+        `[P24 register:/sms/orders/for-user] user=${req.user.email} ` +
+        `counts={septic:${counts.septic}, leak:${counts.leak}, co:${counts.co}} ` +
+        `amount=${formatPLN(amountGrosze)}`
+      );
 
       const posId      = process.env.P24_POS_ID?.trim();
       const apiKey     = process.env.P24_API_KEY?.trim();
@@ -314,18 +328,37 @@ module.exports = (app, db, auth) => {
 
       if (mUser) {
         const userId = mUser[1];
-        // Całe konto: wszystkim urządzeniom usera resetujemy sms_limit i +365 dni
+        // ↑ Globalny top-up na KONTO: +30 SMS oraz +365 dni od max(dziś, obecna data)
         await db.query(
-          `UPDATE devices
-              SET sms_limit = 30,
-                  abonament_expiry = (COALESCE(abonament_expiry, CURRENT_DATE) + INTERVAL '365 days')::date
-            WHERE user_id = $1::uuid`,
-          [userId]
+          `UPDATE users
+              SET sms_limit = COALESCE(sms_limit,0) + $2,
+                  abonament_expiry =
+                    (CASE
+                      WHEN abonament_expiry IS NULL OR abonament_expiry < CURRENT_DATE
+                        THEN CURRENT_DATE
+                      ELSE abonament_expiry
+                     END + INTERVAL '365 days')::date
+            WHERE id = $1::uuid`,
+          [userId, SMS_TOPUP_PER_ORDER]
         );
+        // (opcjonalnie) zsynchronizuj devices, jeśli gdzieś jeszcze je czytasz
+        await db.query(
+          `UPDATE devices d
+              SET sms_limit = u.sms_limit,
+                  abonament_expiry = u.abonament_expiry
+             FROM users u
+            WHERE d.user_id = u.id AND u.id = $1::uuid`,
+          [userId]
+        ).catch(()=>{});
+
+        // LOG
+        const { rows:[u] } = await db.query(`SELECT email, sms_limit, abonament_expiry FROM users WHERE id=$1::uuid`, [userId]);
+        console.log(`[P24 verify:USER] ok user=${u?.email||userId} +${SMS_TOPUP_PER_ORDER} SMS, expiry→ ${u?.abonament_expiry}`);
+
         return res.send(`
           <html><body style="font-family:sans-serif; text-align:center; margin-top:50px;">
             <h2>Płatność zakończona pomyślnie 😊</h2>
-            <p>Pakiet SMS i abonament odnowione dla wszystkich Twoich urządzeń.</p>
+            <p>Pakiet 30 SMS dodany do Twojego konta i abonament przedłużony o 365 dni.</p>
             <a href="https://api.tago.io/file/64482e832567a60008e515fa/icons/dziekuje.html">Wróć do aplikacji</a>
           </body></html>
         `);

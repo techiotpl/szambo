@@ -28,7 +28,7 @@ require('dotenv').config();
 
 +// Cena dla pojedynczego urządzenia (endpoint /sms/orders)
 +// ← USTAW REALNĄ: 50,00 zł = 5000
-+const PRICE_SINGLE_DEVICE_GROSZE = 5000; // 50,00 zł
+const PRICE_SINGLE_DEVICE_GROSZE = 5000; // 50,00 zł
 
 // Ceny per typ urządzenia (endpoint /sms/orders/for-user)
 const PRICES_GROSZE = {

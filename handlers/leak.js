@@ -98,8 +98,8 @@ module.exports.handleUplink = async function (utils, dev, body) {
         [dev.user_id]
       );
       if (!u) { console.log('[LEAK] SKIP – user not found for device', dev.id); return; }
-      if (u.expired === true) {
-        console.log(\`[LEAK] SKIP – abonament expired for user=\${dev.user_id} (expiry=\${u.abonament_expiry || 'NULL'})\`);
+      if (u.expired === true || u.expired === 't') {
+        console.log(`[LEAK] SKIP – abonament expired for user=${dev.user_id} (expiry=${u.abonament_expiry || 'NULL'})`);
         return;
       }
 
@@ -116,19 +116,19 @@ module.exports.handleUplink = async function (utils, dev, body) {
       );
       const phone = phones.length ? normalisePhone(phones[0].phone) : null;
       if (!phone) {
-        console.log(\`[LEAK] SKIP – brak zarejestrowanego numeru (septic) u user_id=\${dev.user_id}\`);
+        console.log(`[LEAK] SKIP – brak zarejestrowanego numeru (septic) u user_id=${dev.user_id}`);
         return;
       }
 
       // c) treść
       const devName = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : dev.serial_number;
-      const smsMsg  = \`Wykryto zalanie – \${devName}. Sprawdź natychmiast!\`;
+      const smsMsg  = `Wykryto zalanie – \${devName}. Sprawdź natychmiast!`;
 
       // d) SMS z globalnej puli (users.sms_limit)
       const ok = await sendSmsWithQuota(db, dev.user_id, phone, smsMsg, 'leak');
-      if (!ok) { console.log(\`[LEAK] SKIP – brak SMS w globalnej puli user=\${dev.user_id}\`); return; }
+      if (!ok) { console.log(`[LEAK] SKIP – brak SMS w globalnej puli user=${dev.user_id}`); return; }
       await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
-      console.log(\`[LEAK] SMS sent (global quota) → \${phone}\`);
+      console.log(`[LEAK] SMS sent (global quota) → ${phone}`);
 
       // e) po SMS – telefon (Twilio) na ten sam numer
       const callOk = await sendTwilioCall(phone);

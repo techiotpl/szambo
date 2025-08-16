@@ -1184,7 +1184,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
 
     // ── walidacja wejścia ─────────────────────────────────────────
     const em = String(email || '').trim().toLowerCase();
-    const serial = String(serie_number || '').trim();
+    const serial = String(serie_number || '').replace(/\s+/g,'').trim().toUpperCase();
     const typeRaw = String(device_type || '').trim().toLowerCase();
     if (!em || !serial) {
       return res.status(400).send('serie_number & email required');
@@ -1350,8 +1350,16 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
 // ── NOWY /uplink ───────────────────────────────────────────────────
 app.post('/uplink', async (req, res) => {
   try {
-    const devEui = req.body.dev_eui || req.body.devEUI || req.body.deviceInfo?.devEui;
-    if (!devEui) return res.status(400).send('dev_eui missing');
+    // Złap wszystkie popularne warianty z ChirpStacka
+    const rawDevEui =
+      req.body?.deviceInfo?.devEui ??
+      req.body?.devEui ??
+      req.body?.dev_eui ??
+      req.body?.devEUI ??
+      null;
+    if (!rawDevEui) return res.status(400).send('dev_eui missing');
+    // 🔑 NORMALIZACJA: zapis i porównywanie zawsze WIELKIMI
+    const devEui = String(rawDevEui).trim().toUpperCase();
 
     // 1) pobieramy urządzenie
     const { rows } = await db.query('SELECT * FROM devices WHERE serial_number=$1', [devEui]);

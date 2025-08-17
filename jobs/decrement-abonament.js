@@ -123,8 +123,7 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
     console.log(`✅ Zresetowano sms_limit=0 u ${affected.length} użytkowników`);
 
     if (affected.length === 0) {
-      await db.end();
-      return;
+      return; // pool zamknie się w finally
     }
 
     // (opcjonalnie) dla spójności, wyzeruj sms_limit także w devices powiązanych z tymi userami

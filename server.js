@@ -22,6 +22,9 @@ const handlers = {
   // dodaj inne typy, jeśli będą
 };
 
++// ── Sekret do /uplink ───────────────────────────────────────────────
++const UPLINK_BEARER = (process.env.UPLINK_BEARER || '').trim();
+
 require('dotenv').config();
 const helmet = require('helmet');
 
@@ -1347,8 +1350,35 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
 });
 
 
-// ── NOWY /uplink ───────────────────────────────────────────────────
-app.post('/uplink', async (req, res) => {
+// ── /uplink: wymagaj sekretny token w nagłówku Authorization ───────
+// Akceptujemy DWIE formy:
+//   1) "Authorization: Bearer <TOKEN>"
+//   2) "Authorization: <TOKEN>"        ← to możesz wpisać w ChirpStacku
+function ensureUplinkBearer(req, res, next) {
+  if (!UPLINK_BEARER) {
+    console.warn('⚠️ UPLINK_BEARER nie ustawiony – blokuję /uplink');
+    return res.status(500).send('uplink bearer not configured');
+  }
+  const ip   = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+  const hdr  = (req.headers.authorization || '').trim();
+  if (!hdr) {
+    console.warn(`[UPLINK] missing Authorization header from ${ip}`);
+    return res.status(401).send('Unauthorized');
+  }
+  // wyjmij token (z prefiksem Bearer lub bez)
+  let token = hdr;
+  if (/^Bearer\s+/i.test(hdr)) {
+    token = hdr.replace(/^Bearer\s+/i, '').trim();
+  }
+  if (token !== UPLINK_BEARER) {
+    console.warn(`[UPLINK] bad token from ${ip}`);
+    return res.status(401).send('Unauthorized');
+  }
+  return next();
+}
+
+// ── /uplink (z Bearer + normalizacja EUI do UPPERCASE) ─────────────
+app.post('/uplink', ensureUplinkBearer, async (req, res) => {
   try {
     // Złap wszystkie popularne warianty z ChirpStacka
     const rawDevEui =

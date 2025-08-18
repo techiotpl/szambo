@@ -1,6 +1,7 @@
 // handlers/co.js
 const axios = require('axios');
 
+// Twilio (CALL po SMS)
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN  || '';
 const TWILIO_FLOW_SID    = process.env.TWILIO_FLOW_SID    || '';
@@ -12,128 +13,174 @@ function toBool(v) {
   return false;
 }
 
-async function twilioCallOnce(toE164) {
+function normalizeE164(num) {
+  const digits = String(num || '').replace(/[^\d+]/g, '');
+  if (!digits) return null;
+  return digits.startsWith('+') ? digits : `+48${digits}`;
+}
+
+async function twilioCallOnce(toRaw) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FLOW_SID || !TWILIO_FROM) {
     console.log('[CO] Twilio env not set – skip CALL');
     return false;
   }
   try {
-    const params = new URLSearchParams({ To: toE164, From: TWILIO_FROM });
+    const to = normalizeE164(toRaw);
+    if (!to) return false;
+
     const url = `https://studio.twilio.com/v2/Flows/${TWILIO_FLOW_SID}/Executions`;
-    const resp = await axios.post(url, params.toString(), {
+    const payload = new URLSearchParams({ To: to, From: TWILIO_FROM }).toString();
+    const resp = await axios.post(url, payload, {
       auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN },
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 15000,
+      timeout: 15000
     });
-    console.log(`[CO] Twilio CALL OK → ${toE164} sid=${resp.data?.sid || '?'}`);
+    console.log(`[CO] Twilio CALL OK → ${to}, sid=${resp.data?.sid || '?'}`);
     return true;
   } catch (e) {
-    console.error('[CO] Twilio CALL ERR', toE164, e.response?.data || e.message);
+    console.error('[CO] Twilio CALL ERR', e.response?.data || e.message);
     return false;
   }
 }
 
 module.exports.handleUplink = async function (utils, dev, body) {
-  const { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment } = utils;
+  const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
   const obj = body.object || {};
   const now = moment();
 
-  // 1) odczyt co_status / co_alarm / ppm / batt
-  let alarm = false, src = '';
+  // 1) odczyt alarmu / ppm / batt
+  let alarm = false;
+  let src = '';
   if ('co_alarm' in obj && toBool(obj.co_alarm)) { alarm = true; src = 'co_alarm'; }
   else if (typeof obj.co_status === 'string') {
     const s = obj.co_status.toLowerCase();
-    if (s === 'alarm') { alarm = true; src = 'co_status'; }
-    else if (s === 'normal') { alarm = false; src = 'co_status'; }
+    if (s === 'alarm')  { alarm = true;  src = 'co_status'; }
+    if (s === 'normal') { alarm = false; src = 'co_status'; }
   }
   const ppm   = obj.co_ppm != null ? Number(obj.co_ppm) : null;
-  const battV = obj.voltage ? Number(obj.voltage) : null;
+  const battV = obj.voltage != null ? Number(obj.voltage) : null;
 
-  // 2) jeżeli brak jawnego alarmu, ale mamy ppm -> sprawdź próg z DB
-  if (src === '' && ppm != null) {
+  // jeżeli brak jawnego alarmu, to sprawdź próg z DB
+  if (!src && ppm != null) {
     const threshold = Number(dev.co_threshold_ppm || 50);
     alarm = ppm >= threshold;
     src = `ppm>=${threshold}`;
   }
 
-  // 3) cooldown (jak w leak) – ale my i tak wysyłamy TYLKO przy zmianie → tu tylko blok do CALL/SMS, jeśli potrzeba
+  const prev = !!dev.co_status;
+  const changed = alarm !== prev;
+
+  // cooldown (opcjonalnie)
   const cooldownMin = dev.co_alert_cooldown_min || 180;
   const canAlert = !dev.co_last_alert_ts || now.diff(dev.co_last_alert_ts, 'minutes') >= cooldownMin;
 
   console.log(`[CO] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
-  console.log(`[CO] PARSED serial=${dev.serial_number} alarm=${alarm} (src=${src}) ppm=${ppm ?? 'n/a'} battV=${battV ?? 'n/a'} prev=${!!dev.co_status} cooldown=${cooldownMin}m canAlert=${canAlert} last_alert=${dev.co_last_alert_ts || 'never'}`);
+  console.log(`[CO] PARSED serial=${dev.serial_number} alarm=${alarm} (src=${src}) ppm=${ppm ?? 'n/a'} battV=${battV ?? 'n/a'} prev=${prev} canAlert=${canAlert}`);
 
-  // 4) zmiana stanu → zapis + (ew.) alert
-  if (alarm !== !!dev.co_status) {
-    console.log(`[CO] CHANGE ${dev.serial_number}: ${!!dev.co_status} → ${alarm}`);
+  // 2) zmiana stanu → zapis + (ew.) alert
+  if (changed) {
+    console.log(`[CO] CHANGE ${dev.serial_number}: ${prev} → ${alarm}`);
+    try {
+      await db.query(
+        `UPDATE devices
+            SET co_status = $1,
+                co_last_change_ts = now(),
+                co_ppm = COALESCE($2, co_ppm),
+                battery_v = COALESCE($3, battery_v)
+          WHERE id = $4`,
+        [alarm, ppm, battV, dev.id]
+      );
+    } catch (e) {
+      console.error('[CO] DB update(change) error:', e);
+    }
 
-    await db.query(
-      `UPDATE devices
-          SET co_status=$1,
-              co_last_change_ts=now(),
-              co_ppm = COALESCE($2, co_ppm),
-              battery_v = COALESCE($3, battery_v)
-        WHERE id=$4`,
-      [ alarm, ppm, battV, dev.id ]
-    );
-
-    // WYŚLIJ ALERT TYLKO GDY PRZECHODZIMY W ALARM
+    // ALERT tylko przy przejściu w alarm i po cooldownie
     if (alarm && canAlert) {
-      // odbiorcy – niezależni od septic (per-device)
-      const nums = [dev.phone, dev.phone2].map(normalisePhone).filter(Boolean);
-      const name = (dev.name && dev.name.trim()) ? dev.name : dev.serial_number;
-      const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
-
-      let smsSent = 0;
-      if (nums.length && (dev.sms_limit == null || Number(dev.sms_limit) > 0)) {
-        // SMS do wszystkich numerów – jeśli brak limitu, przepuszczamy (0 = zablokuj)
-        try {
-          for (const n of nums) {
-            if (dev.sms_limit != null && Number(dev.sms_limit) <= 0) break;
-            await sendSMS(n, msg, 'co');
-            smsSent++;
-            // zdejmujemy limit po każdym skutecznym SMS
-            await db.query('UPDATE devices SET sms_limit = GREATEST(0,(COALESCE(sms_limit,0) - 1)) WHERE id=$1', [dev.id]);
-          }
-        } catch (e) {
-          console.error('[CO] SMS ERR', e.message || e);
+      try {
+        // a) sprawdź globalny abonament/limit
+        const { rows: [u] } = await db.query(
+          `SELECT sms_limit,
+                  abonament_expiry,
+                  (abonament_expiry IS NOT NULL AND abonament_expiry < CURRENT_DATE) AS expired
+             FROM users
+            WHERE id = $1`,
+          [dev.user_id]
+        );
+        if (!u) {
+          console.log('[CO] SKIP – user not found for device', dev.id);
+          return;
         }
-      } else {
-        console.log('[CO] SMS skipped (no numbers or sms_limit=0)');
-      }
+        if (u.expired === true) {
+          console.log(`[CO] SKIP – abonament expired for user=${dev.user_id} (expiry=${u.abonament_expiry || 'NULL'})`);
+          return;
+        }
 
-      // CALL tylko JEŚLI wysłaliśmy przynajmniej 1 SMS i (opcjonalnie) chcesz liczyć CALL do limitu
-      if (smsSent > 0) {
-        for (const n of nums) {
-          const ok = await twilioCallOnce(n);
-          if (ok) {
-            // jeśli chcesz liczyć CALL do sms_limit – odkomentuj:
-            // await db.query('UPDATE devices SET sms_limit = GREATEST(0,(COALESCE(sms_limit,0) - 1)) WHERE id=$1', [dev.id]);
+        // b) NUMERY: najpierw co_phone1/co_phone2 (oba, jeśli są), fallback: 1. numer z "septic"
+        const targets = [dev.co_phone1, dev.co_phone2].map(normalisePhone).filter(Boolean);
+        if (targets.length === 0) {
+          const { rows: ph } = await db.query(
+            `SELECT phone
+               FROM devices
+              WHERE user_id = $1
+                AND device_type = 'septic'
+                AND phone IS NOT NULL AND LENGTH(TRIM(phone)) > 0
+              ORDER BY created_at ASC
+              LIMIT 1`,
+            [dev.user_id]
+          );
+          if (ph.length) targets.push(normalisePhone(ph[0].phone));
+        }
+
+        if (targets.length === 0) {
+          console.log(`[CO] SKIP – brak docelowych numerów (co_phone1/co_phone2 ani septic) u user_id=${dev.user_id}`);
+          return;
+        }
+
+        // c) treść
+        const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : dev.serial_number;
+        const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
+
+        // d) wyślij do KAŻDEGO numeru z listy; każdy SMS pobiera 1 z globalnej puli
+        for (const to of targets) {
+          const ok = await sendSmsWithQuota(db, dev.user_id, to, msg, 'co');
+          if (!ok) {
+            console.log(`[CO] SKIP SMS → brak SMS w globalnej puli (user=${dev.user_id})`);
+            break; // skończyła się pula – przerwij
+          }
+          await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
+          console.log(`[CO] SMS sent (global quota) → ${to}`);
+
+          // CALL po udanym SMS na ten sam numer
+          const callOk = await twilioCallOnce(to);
+          if (callOk) {
+            await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
           }
         }
-      } else {
-        console.log('[CO] CALL skipped (no prior SMS sent)');
+      } catch (e) {
+        console.error('[CO] ALERT block error:', e);
       }
-
-      await db.query('UPDATE devices SET co_last_alert_ts=now() WHERE id=$1', [dev.id]);
     }
   } else {
     // bez zmiany – tylko update pól pomocniczych
     if (ppm != null || battV != null) {
-      await db.query(
-        'UPDATE devices SET co_ppm=COALESCE($1,co_ppm), battery_v=COALESCE($2,battery_v) WHERE id=$3',
-        [ppm, battV, dev.id]
-      );
+      try {
+        await db.query(
+          'UPDATE devices SET co_ppm=COALESCE($1,co_ppm), battery_v=COALESCE($2,battery_v) WHERE id=$3',
+          [ppm, battV, dev.id]
+        );
+      } catch (e) {
+        console.error('[CO] DB update(no-change) error:', e);
+      }
     }
   }
 
-  // 5) SSE dla dashboardu / list
+  // 3) SSE dla frontu
   sendEvent({
     serial: dev.serial_number,
     co: alarm,
     co_ppm: ppm,
     battery_v: battV,
-    ts: now.toISOString(),
+    ts: now.toISOString()
   });
 };

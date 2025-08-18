@@ -22,8 +22,8 @@ const handlers = {
   // dodaj inne typy, jeśli będą
 };
 
-+// ── Sekret do /uplink ───────────────────────────────────────────────
-+const UPLINK_BEARER = (process.env.UPLINK_BEARER || '').trim();
+// ── Sekret do /uplink ───────────────────────────────────────────────
+const UPLINK_BEARER = (process.env.UPLINK_BEARER || '').trim();
 
 require('dotenv').config();
 const helmet = require('helmet');

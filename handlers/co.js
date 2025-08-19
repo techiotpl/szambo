@@ -57,11 +57,14 @@ function batteryLevelToPct(level) {
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
-    // ChirpStack v4 codec zwraca zwykle { data, warnings, errors }.
+   
 
 
   const obj = body?.object || body?.data || body || {};
   const now = moment();
+
+    // Ujednolicone użycie numeru seryjnego (bez wywoływania jak funkcji)
+  const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 1) ODCZYT wartości wg Nexelec-decoder (poprawione):
@@ -124,9 +127,9 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const cooldownMin = dev.co_alert_cooldown_min || 180;
   const canAlert = !dev.co_last_alert_ts || now.diff(dev.co_last_alert_ts, 'minutes') >= cooldownMin;
 
-  console.log(`[CO] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
-    console.log(
-    `[CO] PARSED serial=${dev.serial_number} `
+  console.log(`[CO] RX ${serial} obj=${JSON.stringify(obj)}`);
+  console.log(
+    `[CO] PARSED serial=${serial} `
      `alarm=${alarm} (src=${src}) `
      `ppm=${ppm ?? 'n/a'} `
      `battV=${battV ?? 'n/a'} `
@@ -139,7 +142,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   // 2) Zmiana stanu → zapis + (ew.) alert
   // ─────────────────────────────────────────────────────────────────────────────
   if (changed) {
-    console.log(`[CO] CHANGE ${dev.serial_number}: ${prev} → ${alarm}`);
+    console.log(`[CO] CHANGE ${serial}: ${prev} → ${alarm}`);
     try {
       await db.query(
         `UPDATE devices
@@ -197,7 +200,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
         }
 
         // c) treść
-        const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : dev.serial_number;
+        const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
         const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
 
         // d) wyślij do KAŻDEGO numeru z listy; każdy SMS pobiera 1 z globalnej puli
@@ -238,7 +241,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   // 3) SSE dla frontu — dodajemy battery_level (+ %), zostawiamy battery_v jak było
   // ─────────────────────────────────────────────────────────────────────────────
   sendEvent({
-    serial: dev.serial_number,
+    serial,
     co: alarm,
     co_ppm: ppm,
     battery_v: battV,              // napięcie jeśli przyjdzie

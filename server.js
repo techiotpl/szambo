@@ -1218,6 +1218,70 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /me/devices/claim — użytkownik dopina istniejące urządzenie do konta
+//  body: { serial, device_type, device_name?, street? }
+//  • walidacja 16-znakowego EUI (HEX, wielkie litery)
+//  • weryfikacja w LNS (chirpUpdate), jak w adminowej ścieżce
+//  • odrzucenie, jeśli serial już przypięty do innego usera
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/me/devices/claim', auth, consentGuard, async (req, res) => {
+  try {
+    const { serial, device_type, device_name = '', street = null } = req.body || {};
+
+    const serialNorm = String(serial || '').trim().toUpperCase();
+    if (!/^[0-9A-F]{16}$/.test(serialNorm)) {
+      return res.status(400).send('serial must be 16 hex chars');
+    }
+    const type = String(device_type || '').trim().toLowerCase();
+    if (!['septic','leak','co'].includes(type)) {
+      return res.status(400).send('device_type must be "septic", "leak" or "co"');
+    }
+
+    // 1) Czy urządzenie już istnieje?
+    const { rows: exists } = await db.query(
+      'SELECT user_id FROM devices WHERE serial_number = $1 LIMIT 1',
+      [serialNorm]
+    );
+
+    if (exists.length) {
+      // Jeśli już jest przypięte do TEGO usera → idempotentnie OK
+      if (exists[0].user_id === req.user.id) {
+        return res.status(200).json({ ok: true, alreadyOwned: true });
+      }
+      // Przypięte do innego konta
+      return res.status(409).send('Device already registered');
+    }
+
+    // 2) Sprawdzenie w LNS (jak w /admin/create-device-with-user)
+    const label = device_name || req.user.email || serialNorm;
+    const lnsResults = await chirpUpdate(serialNorm, label, street);
+    const anyOk = Array.isArray(lnsResults) && lnsResults.some(r => r && r.ok);
+    if (!anyOk) {
+      return res
+        .status(400)
+        .json({ message: 'Urządzenie nie znaleziono w żadnym LNS, rejestracja przerwana', lns: lnsResults });
+    }
+
+    // 3) Wstaw urządzenie do devices przypisane do zalogowanego usera
+    await db.query(
+      `INSERT INTO devices (
+         user_id, name, serial_number, eui,
+         street, device_type
+       )
+       VALUES ($1,$2,$3,$3,$4,$5)`,
+      [req.user.id, device_name || null, serialNorm, street ? String(street).trim() : null, type]
+    );
+
+    console.log(`✅ [/me/devices/claim] user=${req.user.email} dodał ${serialNorm} (type=${type})`);
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('❌ Error in /me/devices/claim:', e);
+    return res.status(500).send('server error');
+  }
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PUT /device/:id/phone — zmiana numeru telefonu (wymaga auth)
 // ─────────────────────────────────────────────────────────────────────────────
 app.put('/device/:id/phone', auth, consentGuard, async (req, res) => {

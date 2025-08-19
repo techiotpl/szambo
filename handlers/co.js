@@ -103,9 +103,16 @@ module.exports.handleUplink = async function (utils, dev, body) {
     src = `ppm>=${threshold}`;
   }
 
-  // Bateria (Nexelec): energyStatus → High/Medium/Low/Critical
-  const batteryLevel = obj.energyStatus || null; // string lub null
-  const batteryPct   = batteryLevelToPct(batteryLevel);
+  // Bateria:
+  //  • energyStatus: "High" | "Medium" | "Low" | "Critical"  → mapujemy na % (szacunek do UI)
+  //  • remainingProductLifetime: { value: <miesiące>, unit: "month" } → przekażemy w SSE (bez zapisu do DB)
+  const batteryLevel = obj.energyStatus || null;            // string lub null
+  const batteryPct   = batteryLevelToPct(batteryLevel);     // 80/40/8/1 (% – przybliżenie)
+  const batteryMonthsLeft = (
+    obj.remainingProductLifetime
+    && typeof obj.remainingProductLifetime === 'object'
+    && obj.remainingProductLifetime.value != null
+  ) ? Number(obj.remainingProductLifetime.value) : null;
 
   // Napięcie w V: zostawiamy jak było, jeśli przyjdzie "voltage", uaktualnimy battery_v; inaczej nie tykamy.
   const battV = obj.voltage != null ? Number(obj.voltage) : null;
@@ -118,7 +125,15 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const canAlert = !dev.co_last_alert_ts || now.diff(dev.co_last_alert_ts, 'minutes') >= cooldownMin;
 
   console.log(`[CO] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
-  console.log(`[CO] PARSED serial=${dev.serial_number} alarm=${alarm} (src=${src}) ppm=${ppm ?? 'n/a'} battV=${battV ?? 'n/a'} energyStatus=${batteryLevel ?? 'n/a'} prev=${prev} canAlert=${canAlert}`);
+    console.log(
+    `[CO] PARSED serial=${dev.serial_number} `
+     `alarm=${alarm} (src=${src}) `
+     `ppm=${ppm ?? 'n/a'} `
+     `battV=${battV ?? 'n/a'} `
+     `energyStatus=${batteryLevel ?? 'n/a'} `
+     `monthsLeft=${batteryMonthsLeft ?? 'n/a'} `
+     `prev=${prev} canAlert=${canAlert}`
+  );
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 2) Zmiana stanu → zapis + (ew.) alert
@@ -228,7 +243,8 @@ module.exports.handleUplink = async function (utils, dev, body) {
     co_ppm: ppm,
     battery_v: battV,              // napięcie jeśli przyjdzie
     battery_level: batteryLevel,   // High/Medium/Low/Critical
-    battery_level_pct: batteryPct, // szacunek dla UI
+       battery_level_pct: batteryPct, // szacunek dla UI
+    battery_months_left: batteryMonthsLeft, // liczba miesięcy z remainingProductLifetime
     ts: now.toISOString()
   });
 };

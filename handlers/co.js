@@ -130,12 +130,12 @@ module.exports.handleUplink = async function (utils, dev, body) {
   console.log(`[CO] RX ${serial} obj=${JSON.stringify(obj)}`);
   console.log(
     `[CO] PARSED serial=${serial} `
-     `alarm=${alarm} (src=${src}) `
-     `ppm=${ppm ?? 'n/a'} `
-     `battV=${battV ?? 'n/a'} `
-     `energyStatus=${batteryLevel ?? 'n/a'} `
-     `monthsLeft=${batteryMonthsLeft ?? 'n/a'} `
-     `prev=${prev} canAlert=${canAlert}`
+    + `alarm=${alarm} (src=${src}) `
+    + `ppm=${ppm ?? 'n/a'} `
+    + `battV=${battV ?? 'n/a'} `
+    + `energyStatus=${batteryLevel ?? 'n/a'} `
+    + `monthsLeft=${batteryMonthsLeft ?? 'n/a'} `
+    + `prev=${prev} canAlert=${canAlert}`
   );
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
         }
 
         // c) treść
-        const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
+       const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
         const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
 
         // d) wyślij do KAŻDEGO numeru z listy; każdy SMS pobiera 1 z globalnej puli

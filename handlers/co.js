@@ -148,6 +148,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
         `UPDATE devices
             SET co_status = $1,
                 co_last_change_ts = now(),
+                co_last_uplink_ts = now(),
                 co_ppm = COALESCE($2, co_ppm),
                 battery_v = COALESCE($3, battery_v)
           WHERE id = $4`,
@@ -224,18 +225,21 @@ module.exports.handleUplink = async function (utils, dev, body) {
       }
     }
   } else {
-    // bez zmiany – tylko update pól pomocniczych
-    if (ppm != null || battV != null) {
-      try {
-        await db.query(
-          'UPDATE devices SET co_ppm=COALESCE($1,co_ppm), battery_v=COALESCE($2,battery_v) WHERE id=$3',
-          [ppm, battV, dev.id]
-        );
-      } catch (e) {
-        console.error('[CO] DB update(no-change) error:', e);
-      }
+    // ZAWSZE zaznacz ostatni uplink; ppm/battery tylko gdy przyszły
+    try {
+      await db.query(
+        `UPDATE devices
+            SET co_last_uplink_ts = now(),
+                co_ppm = COALESCE($1, co_ppm),
+                battery_v = COALESCE($2, battery_v)
+          WHERE id = $3`,
+        [ppm, battV, dev.id]
+      );
+    } catch (e) {
+      console.error('[CO] DB update(no-change) error:', e);
     }
   }
+
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 3) SSE dla frontu — dodajemy battery_level (+ %), zostawiamy battery_v jak było

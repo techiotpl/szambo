@@ -22,6 +22,10 @@ const handlers = {
   // dodaj inne typy, jeśli będą
 };
 
+// Publiczny bazowy adres do linków w mailach (potwierdzenie konta)
+const PUBLIC_BASE_URL    = (process.env.PUBLIC_BASE_URL    || 'https://szambo.onrender.com').trim();
+const ADMIN_NOTIFY_EMAIL = (process.env.ADMIN_NOTIFY_EMAIL || 'biuro@techiot.pl').trim();
+
 // ── Sekret do /uplink ───────────────────────────────────────────────
 const UPLINK_BEARER = (process.env.UPLINK_BEARER || '').trim();
 
@@ -116,6 +120,27 @@ const MIGRATION = String.raw`
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 --────────────────────────  USERS  ────────────────────────
+-- pole potwierdzenia konta (e-maila)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS confirmed BOOLEAN;
+-- istniejących nie blokujemy: jeśli NULL → TRUE
+UPDATE users SET confirmed = TRUE WHERE confirmed IS NULL;
+-- domyślnie FALSE dla nowych rekordów (po powyższym uzupełnieniu)
+ALTER TABLE users ALTER COLUMN confirmed SET DEFAULT FALSE;
+
+-- tokeny do potwierdzania konta (klikane z maila admina)
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+  token      TEXT UNIQUE NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token);
+
+
+
+
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
@@ -128,6 +153,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 -- gdy skrypt był już odpalony wcześniej i kolumny nie ma:
 ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS confirmed BOOLEAN DEFAULT FALSE;
 
 --────────────────────────  DEVICES  ──────────────────────
 CREATE TABLE IF NOT EXISTS devices (
@@ -460,6 +486,11 @@ async function sendSMS(phone, msg, tag = '') {
     throw new Error('SMSplanet logic error: ' + JSON.stringify(data));
   }
   return data;
+}
+
+function randomHex(bytes = 16) {
+  try { return crypto.randomBytes(bytes).toString('hex'); }
+  catch { return Math.random().toString(16).slice(2).padEnd(bytes*2, '0'); }
 }
 
 
@@ -885,6 +916,12 @@ app.post('/login', authLimiter, async (req, res) => {
     return res.status(403).send('ACCOUNT_INACTIVE');
   }
 
+	  // e-mail/konto niepotwierdzone przez admina?
+  if (u.confirmed === false) {
+    console.log(`⛔ login: email not confirmed ${email}`);
+    return res.status(403).send('EMAIL_NOT_CONFIRMED');
+  }
+
   // sprawdź, czy są aktualne zgody
   const { rows:[row] } = await db.query(
     `SELECT COUNT(*) AS cnt
@@ -1046,7 +1083,7 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   console.log(`➕ [POST /admin/create-user] Tworzę usera: ${email}`);
   const hash = await bcrypt.hash(password, 10);
   await db.query(
-    'INSERT INTO users(email,password_hash,role,name,company) VALUES($1,$2,$3,$4,$5)',
+    'INSERT INTO users(email,password_hash,role,name,company,confirmed) VALUES($1,$2,$3,$4,$5,TRUE)',
     [email.toLowerCase(), hash, role, name, company]
   );
   console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
@@ -1225,10 +1262,10 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
         console.log(`ℹ️  user exists: ${em} (id=${userId}) — attach device only`);
       } else {
         // 2) tworzymy konto z losowym hasłem
-        basePwd = crypto.randomBytes(4).toString('hex'); // 8 znaków
+       basePwd = randomHex(4); // 8 znaków
         const hash = await bcrypt.hash(basePwd, 10);
         const insU = await client.query(
-          'INSERT INTO users(email, password_hash, name, company) VALUES ($1,$2,$3,$4) RETURNING id',
+          'INSERT INTO users(email, password_hash, name, company, confirmed) VALUES ($1,$2,$3,$4,FALSE) RETURNING id',
           [em, hash, userName, company]
         );
         userId = insU.rows[0].id;
@@ -1326,6 +1363,25 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
           console.log(`📱 [/admin/create-device-with-user] welcome SMS → ${nrm}`);
           await sendSMS(nrm, 'Gratulacje! Pakiet 30 SMS aktywowany.');
         }
+		          // ➕ WYŚLIJ LINK DO POTWIERDZENIA NA BIURO
+        try {
+          const token = randomHex(16);
+          await db.query(
+            `INSERT INTO email_verification_tokens(user_id, token, expires_at)
+             VALUES($1,$2, now() + interval '14 days')`,
+            [userId, token]
+          );
+          const url = `${PUBLIC_BASE_URL}/admin/confirm-account?token=${encodeURIComponent(token)}`;
+          const htmlAdmin = `
+            <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
+              <p>Nowe konto dodane przez panel:</p>
+              <p><strong>${em}</strong></p>
+              <p>Potwierdź aktywację: <a href="${url}">${url}</a></p>
+              <p>(Link wygaśnie za 14 dni)</p>
+            </div>`;
+          await sendEmail(ADMIN_NOTIFY_EMAIL, '🔗 Potwierdź konto użytkownika – TechioT', htmlAdmin);
+          console.log(`✉️  wysłano link potwierdzający do ${ADMIN_NOTIFY_EMAIL}`);
+        } catch (ee) { console.warn('⚠️ confirm-mail error:', ee.message); }
       } else {
         console.log('ℹ️  existing user — skipped welcome mail/SMS');
       }
@@ -1696,6 +1752,37 @@ app.post('/consent/decline', auth, async (req, res) => {
   console.log(`[CONSENT] DECLINE ${req.user.email}`);
   await db.query('UPDATE users SET is_active = FALSE WHERE id=$1', [req.user.id]);
   res.sendStatus(200);      // front wyloguje i pokaże info
+});
+
+// ──────────────────────────────────────────────────────────
+// GET /admin/confirm-account?token=...  (publiczny link z maila)
+// Ustawia users.confirmed=TRUE i wysyła do klienta powiadomienie e-mail.
+// ──────────────────────────────────────────────────────────
+app.get('/admin/confirm-account', async (req, res) => {
+  try {
+    const token = String(req.query.token || '').trim();
+    if (!token) return res.status(400).send('Token required');
+
+    const { rows } = await db.query(
+      `UPDATE users u
+          SET confirmed = TRUE
+         FROM email_verification_tokens t
+        WHERE t.token = $1
+          AND t.user_id = u.id
+          AND t.used_at IS NULL
+          AND t.expires_at > now()
+        RETURNING u.id, u.email`, [token]);
+
+    if (!rows.length) return res.status(400).send('Token nieprawidłowy lub wygasł');
+
+    await db.query('UPDATE email_verification_tokens SET used_at = now() WHERE token = $1', [token]).catch(()=>{});
+
+    // powiadom użytkownika
+    const to = rows[0].email;
+    try { await sendEmail(to, '✅ Twoje konto zostało potwierdzone – TechioT',
+           '<div style="font-family:Arial,sans-serif;font-size:15px;color:#333">Twoje konto zostało aktywowane. Możesz się zalogować.</div>'); } catch {}
+    return res.status(200).send('Konto potwierdzone. Użytkownik został powiadomiony.');
+  } catch (e) { console.error('confirm-account error', e); return res.status(500).send('server error'); }
 });
 
 app.listen(PORT, () => console.log(`TechioT backend listening on ${PORT}`));

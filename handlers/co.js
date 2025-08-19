@@ -9,7 +9,7 @@ const TWILIO_FROM        = process.env.TWILIO_FROM        || '';
 
 function toBool(v) {
   if (v === true || v === 1 || v === '1') return true;
-  if (typeof v === 'string') return ['true','t','yes','y','on'].includes(v.toLowerCase());
+  if (typeof v === 'string') return ['true','t','yes','y','on','active'].includes(v.toLowerCase());
   return false;
 }
 
@@ -43,30 +43,68 @@ async function twilioCallOnce(toRaw) {
   }
 }
 
+// Mapowanie poziomu baterii z 'energyStatus' na % (szacunek do UI)
+function batteryLevelToPct(level) {
+  if (!level) return null;
+  const l = String(level).toLowerCase();
+  if (l === 'high')     return 80; // >50%
+  if (l === 'medium')   return 40; // 20–50%
+  if (l === 'low')      return 8;  // 1–10%
+  if (l === 'critical') return 1;  // <1%
+  return null;
+}
+
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
   const obj = body.object || {};
   const now = moment();
 
-  // 1) odczyt alarmu / ppm / batt
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 1) ODCZYT wartości wg Nexelec-decoder (poprawione):
+  //    - alarm → z "localAlarm"/"preAlarm"
+  //    - ppm   → z "coConcentration.value"
+  //    - bateria → z "energyStatus" (string), bez zmiany battery_v w DB
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const typeMsg = (obj.typeOfMessage || '').toString();
+
+  // ppm (priorytet: coConcentration.value)
+  let ppm = null;
+  if (obj.coConcentration && typeof obj.coConcentration === 'object' && obj.coConcentration.value != null) {
+    ppm = Number(obj.coConcentration.value);
+  } else if (obj.co_ppm != null) {
+    ppm = Number(obj.co_ppm);
+  } else if (obj.co != null) {
+    ppm = Number(obj.co); // legacy
+  }
+
+  // alarm – według CO Alarm Status
   let alarm = false;
   let src = '';
-  if ('co_alarm' in obj && toBool(obj.co_alarm)) { alarm = true; src = 'co_alarm'; }
-  else if (typeof obj.co_status === 'string') {
-    const s = obj.co_status.toLowerCase();
-    if (s === 'alarm')  { alarm = true;  src = 'co_status'; }
-    if (s === 'normal') { alarm = false; src = 'co_status'; }
+  if (typeMsg === 'CO Alarm Status') {
+    // "localAlarm" jest kluczowy (właściwy alarm), "preAlarm" to stan wstępny ≥ 40 ppm
+    if (typeof obj.localAlarm === 'string' && obj.localAlarm.toLowerCase() === 'active') {
+      alarm = true; src = 'localAlarm';
+    } else if (typeof obj.preAlarm === 'string' && obj.preAlarm.toLowerCase() === 'active') {
+      // jeśli chcesz, aby pre-alarm też wyzwalał alarm → zostaw; jeśli nie, usuń ten blok
+      alarm = true; src = 'preAlarm';
+    }
   }
-  const ppm   = obj.co_ppm != null ? Number(obj.co_ppm) : null;
-  const battV = obj.voltage != null ? Number(obj.voltage) : null;
 
-  // jeżeli brak jawnego alarmu, to sprawdź próg z DB
+  // Jeśli nie wykryto jawnego źródła alarmu, użyj progu ppm (fallback – jak wcześniej)
   if (!src && ppm != null) {
     const threshold = Number(dev.co_threshold_ppm || 50);
     alarm = ppm >= threshold;
     src = `ppm>=${threshold}`;
   }
+
+  // Bateria (Nexelec): energyStatus → High/Medium/Low/Critical
+  const batteryLevel = obj.energyStatus || null; // string lub null
+  const batteryPct   = batteryLevelToPct(batteryLevel);
+
+  // Napięcie w V: zostawiamy jak było, jeśli przyjdzie "voltage", uaktualnimy battery_v; inaczej nie tykamy.
+  const battV = obj.voltage != null ? Number(obj.voltage) : null;
 
   const prev = !!dev.co_status;
   const changed = alarm !== prev;
@@ -76,9 +114,11 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const canAlert = !dev.co_last_alert_ts || now.diff(dev.co_last_alert_ts, 'minutes') >= cooldownMin;
 
   console.log(`[CO] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
-  console.log(`[CO] PARSED serial=${dev.serial_number} alarm=${alarm} (src=${src}) ppm=${ppm ?? 'n/a'} battV=${battV ?? 'n/a'} prev=${prev} canAlert=${canAlert}`);
+  console.log(`[CO] PARSED serial=${dev.serial_number} alarm=${alarm} (src=${src}) ppm=${ppm ?? 'n/a'} battV=${battV ?? 'n/a'} energyStatus=${batteryLevel ?? 'n/a'} prev=${prev} canAlert=${canAlert}`);
 
-  // 2) zmiana stanu → zapis + (ew.) alert
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 2) Zmiana stanu → zapis + (ew.) alert
+  // ─────────────────────────────────────────────────────────────────────────────
   if (changed) {
     console.log(`[CO] CHANGE ${dev.serial_number}: ${prev} → ${alarm}`);
     try {
@@ -116,7 +156,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
           return;
         }
 
-        // b) NUMERY: najpierw co_phone1/co_phone2 (oba, jeśli są), fallback: 1. numer z "septic"
+        // b) NUMERY: co_phone1/co_phone2 (oba, jeśli są), fallback: 1. numer z 'septic'
         const targets = [dev.co_phone1, dev.co_phone2].map(normalisePhone).filter(Boolean);
         if (targets.length === 0) {
           const { rows: ph } = await db.query(
@@ -175,12 +215,16 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   }
 
-  // 3) SSE dla frontu
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 3) SSE dla frontu — dodajemy battery_level (+ %), zostawiamy battery_v jak było
+  // ─────────────────────────────────────────────────────────────────────────────
   sendEvent({
     serial: dev.serial_number,
     co: alarm,
     co_ppm: ppm,
-    battery_v: battV,
+    battery_v: battV,              // napięcie jeśli przyjdzie
+    battery_level: batteryLevel,   // High/Medium/Low/Critical
+    battery_level_pct: batteryPct, // szacunek dla UI
     ts: now.toISOString()
   });
 };

@@ -57,7 +57,10 @@ function batteryLevelToPct(level) {
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
-  const obj = body.object || {};
+    // ChirpStack v4 codec zwraca zwykle { data, warnings, errors }.
+
+
+  const obj = body?.object || body?.data || body || {};
   const now = moment();
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +75,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   // ppm (priorytet: coConcentration.value)
   let ppm = null;
   if (obj.coConcentration && typeof obj.coConcentration === 'object' && obj.coConcentration.value != null) {
+    // bywa, że value przychodzi jako string – Number() zadba o konwersję
     ppm = Number(obj.coConcentration.value);
   } else if (obj.co_ppm != null) {
     ppm = Number(obj.co_ppm);

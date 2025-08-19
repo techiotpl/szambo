@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 -- gdy skrypt był już odpalony wcześniej i kolumny nie ma:
 ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone  TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS confirmed BOOLEAN DEFAULT FALSE;
 
 --────────────────────────  DEVICES  ──────────────────────
@@ -1076,6 +1077,74 @@ app.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC REGISTER: POST /public/register
+// body: { email, name?, phone? }
+//  • tworzy usera z confirmed=false (is_active=true)
+//  • generuje token i wysyła do biura link do potwierdzenia
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/public/register', async (req, res) => {
+  try {
+    const { email, name, phone } = req.body || {};
+    const em = String(email || '').trim().toLowerCase();
+    if (!em || !em.includes('@')) return res.status(400).send('invalid email');
+
+    // opcjonalny telefon
+    let phoneNorm = null;
+    if (phone != null && String(phone).trim() !== '') {
+      const p = String(phone).replace(/\s+/g, '').trim();
+      phoneNorm = normalisePhone(p);
+      if (!phoneNorm) return res.status(400).send('invalid phone');
+    }
+
+    // czy e-mail już istnieje?
+    const { rowCount: exists } = await db.query(
+      'SELECT 1 FROM users WHERE LOWER(email)=LOWER($1)',
+      [em]
+    );
+    if (exists) return res.status(409).send('email exists');
+
+    // robocze hasło (potem zostanie nadpisane przy potwierdzeniu)
+    const tmpPwd = randomHex(4);
+    const hash   = await bcrypt.hash(tmpPwd, 10);
+
+    const { rows: created } = await db.query(
+      `INSERT INTO users (email, password_hash, name, phone, confirmed, is_active)
+       VALUES ($1,$2,$3,$4,false,true)
+       RETURNING id, email, name`,
+      [em, hash, (name ?? '').toString().trim() || null, phoneNorm]
+    );
+    const userId = created[0].id;
+
+    // token (ważny 14 dni) + e-mail do biura
+    const token = randomHex(16);
+    await db.query(
+      `INSERT INTO email_verification_tokens(user_id, token, expires_at)
+       VALUES($1,$2, now() + interval '14 days')`,
+      [userId, token]
+    );
+
+    const url = `${PUBLIC_BASE_URL}/admin/confirm-account?token=${encodeURIComponent(token)}`;
+    const htmlAdmin = `
+      <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
+        <p><b>Nowa rejestracja użytkownika</b></p>
+        <ul>
+          <li><b>Email:</b> ${em}</li>
+          ${name ? `<li><b>Imię i nazwisko:</b> ${String(name).trim()}</li>` : ''}
+          ${phoneNorm ? `<li><b>Telefon:</b> ${phoneNorm}</li>` : ''}
+        </ul>
+        <p>Potwierdź konto: <a href="${url}">${url}</a> (ważny 14 dni)</p>
+      </div>`;
+
+    await sendEmail(ADMIN_NOTIFY_EMAIL, '🆕 Nowa rejestracja – TechioT', htmlAdmin);
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('❌ /public/register error:', e);
+    return res.status(500).send('server error');
+  }
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
@@ -1777,11 +1846,20 @@ app.get('/admin/confirm-account', async (req, res) => {
 
     await db.query('UPDATE email_verification_tokens SET used_at = now() WHERE token = $1', [token]).catch(()=>{});
 
-    // powiadom użytkownika
-    const to = rows[0].email;
-    try { await sendEmail(to, '✅ Twoje konto zostało potwierdzone – TechioT',
-           '<div style="font-family:Arial,sans-serif;font-size:15px;color:#333">Twoje konto zostało aktywowane. Możesz się zalogować.</div>'); } catch {}
-    return res.status(200).send('Konto potwierdzone. Użytkownik został powiadomiony.');
+    // ustaw finalne hasło i wyślij do użytkownika
+    const userId = rows[0].id;
+    const to     = rows[0].email;
+    const newPwd  = randomHex(4); // 8 znaków
+    const newHash = await bcrypt.hash(newPwd, 10);
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]);
+
+    const htmlU = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
+      <p>Twoje konto zostało potwierdzone.</p>
+      <p><b>Login:</b> ${to}<br><b>Hasło:</b> ${newPwd}</p>
+      <p>Możesz się zalogować w aplikacji TechioT.</p>
+    </div>`;
+    try { await sendEmail(to, '✅ Konto potwierdzone – TechioT', htmlU); } catch {}
+    return res.status(200).send('Konto potwierdzone. Użytkownik otrzymał e-mail z hasłem.');
   } catch (e) { console.error('confirm-account error', e); return res.status(500).send('server error'); }
 });
 

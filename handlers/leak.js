@@ -7,7 +7,7 @@ async function resetStaleAfterUplink(db, deviceId, tsIso) {
   await db.query(
     `UPDATE devices
         SET stale_alert_sent = FALSE,
-            params = COALESCE(params, '{}'::jsonb) || jsonb_build_object('ts_seen', $2)
+            params = COALESCE(params,'{}'::jsonb) || jsonb_build_object('ts_seen', $2::text)
       WHERE id = $1`,
     [deviceId, tsIso]
   );

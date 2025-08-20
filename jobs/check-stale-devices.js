@@ -1,33 +1,43 @@
 // jobs/check-stale-devices.js
-
 /**
- * Ten skrypt:
- *   - Łączy się do bazy Postgres przez Pool (zmienna środowiskowa DATABASE_URL)
- *   - Szuka urządzeń, które nie wysłały pomiaru od HRS godzin i nie miały jeszcze alertu
- *   - Wysyła SMS i/lub e-mail, oznacza w bazie, że alert poszedł
+ * Watchdog nieaktywności urządzeń:
+ *  - obsługuje device_type: septic | leak | co
+ *  - używa dedykowanych numerów telefonów:
+ *      septic → phone, phone2
+ *      leak   → leak_phone1, leak_phone2 (fallback: phone, phone2)
+ *      co     → co_phone1, co_phone2     (fallback: phone, phone2)
+ *  - korzysta z GLOBALNEGO limitu SMS w users.sms_limit (atomowe zużycie)
+ *  - ostatni uplink: COALESCE(params.ts_seen, params.ts, co_last_change_ts, leak_last_change_ts)
+ *  - pętla wysyła 1 alert na “falę nieaktywności”; reset ma zrobić backend przy kolejnym uplinku
  */
 
 const { Pool } = require('pg');
-const axios    = require('axios');
+const axios = require('axios');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
-const HRS = 48; // próg braku odpowiedzi (w godzinach)
+const HRS = parseInt(process.env.STALE_HOURS || '48', 10); // próg braku odpowiedzi
 
-// — pomocnicze funkcje do SMS i e-mail
+/* ───────── helpers ───────── */
+
 function normalisePhone(p) {
-  if (!p || p.length < 9) return null;
-  return p.startsWith('+48') ? p : '+48' + p;
+  if (!p) return null;
+  const s = String(p).replace(/\s+/g, '');
+  if (s.length < 9) return null;
+  return s.startsWith('+48') ? s : '+48' + s;
 }
+
 async function sendSMS(phone, msg) {
   const { SMSAPIKEY: key, SMSAPIPASSWORD: pwd } = process.env;
-  if (!key || !pwd) return;
+  if (!key || !pwd) throw new Error('SMS keys missing');
   const url = `https://api2.smsplanet.pl/sms?key=${key}&password=${pwd}&from=techiot.pl&to=${encodeURIComponent(
     phone
   )}&msg=${encodeURIComponent(msg)}`;
-  await axios.post(url, null, { headers: { Accept: 'application/json' } });
+  const r = await axios.post(url, null, { headers: { Accept: 'application/json' } });
+  if (r.status !== 200) throw new Error('SMS HTTP ' + r.status);
 }
-const nodemailer = require('nodemailer');
-async function sendEmail(to, subj, html) {
+
+async function sendEmail(to, subject, html) {
   const mailer = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '465', 10),
@@ -35,152 +45,155 @@ async function sendEmail(to, subj, html) {
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     tls: { rejectUnauthorized: false },
   });
-  await mailer.sendMail({ from: process.env.SMTP_FROM, to, subject: subj, html });
+  await mailer.sendMail({ from: process.env.SMTP_FROM, to, subject, html });
 }
 
-;(async () => {
-  console.log('DEBUG → DATABASE_URL =', process.env.DATABASE_URL);
+// atomowe zużycie 1 SMS z puli użytkownika; zwraca nową wartość lub null przy braku środków
+async function consumeSms(db, userId, count = 1) {
+  const sql = `
+    UPDATE users
+       SET sms_limit = sms_limit - $2
+     WHERE id = $1::uuid
+       AND sms_limit >= $2
+     RETURNING sms_limit`;
+  const r = await db.query(sql, [userId, count]);
+  return r.rowCount ? r.rows[0].sms_limit : null;
+}
 
-  const db = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    // ssl: { rejectUnauthorized: false }
-  });
+/* ───────── main ───────── */
+
+(async () => {
+  console.log('▶️  check-stale-devices starting… HRS =', HRS);
+
+  const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
   try {
-    // 1) Pobierz wiersze z urządzeniami:
-    //    - last_measurement_ts < teraz - HRS
-    //    - trigger_measurement = FALSE
-    const q = `
-      SELECT
-        id,
-        serial_number,
-        last_measurement_ts,
-        phone,
-        phone2,
-        alert_email,
-        sms_limit
-      FROM devices
-      WHERE trigger_measurement = FALSE
-        AND last_measurement_ts IS NOT NULL
-        AND last_measurement_ts < now() - interval '${HRS} hours'
-    `;
-    const { rows } = await db.query(q);
+    // 0) miękka migracja: flaga, że alert wysłany
+    await db.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS stale_alert_sent BOOLEAN DEFAULT FALSE`);
 
-    if (rows.length === 0) {
+    // 1) pobierz urządzenia z ostatnim uplinkiem starszym niż HRS i bez wysłanego alertu
+    //    Uwaga: liczymy “ostatni uplink” uniwersalnie z params.ts_seen/ts z fallbackami
+    const sql = `
+      SELECT
+        d.id, d.user_id, d.serial_number, d.device_type,
+        d.name,
+        d.do_not_disturb,
+        d.alert_email,
+        d.phone, d.phone2,
+        d.co_phone1, d.co_phone2,
+        d.leak_phone1, d.leak_phone2,
+        COALESCE(
+          NULLIF(d.params->>'ts_seen','')::timestamptz,
+          NULLIF(d.params->>'ts','')::timestamptz,
+          d.co_last_change_ts,
+          d.leak_last_change_ts
+        ) AS last_seen_ts,
+        u.sms_limit AS user_sms_limit
+      FROM devices d
+      JOIN users   u ON u.id = d.user_id
+      WHERE COALESCE(
+              NULLIF(d.params->>'ts_seen','')::timestamptz,
+              NULLIF(d.params->>'ts','')::timestamptz,
+              d.co_last_change_ts,
+              d.leak_last_change_ts
+            ) IS NULL
+         OR COALESCE(
+              NULLIF(d.params->>'ts_seen','')::timestamptz,
+              NULLIF(d.params->>'ts','')::timestamptz,
+              d.co_last_change_ts,
+              d.leak_last_change_ts
+            ) < now() - interval '${HRS} hours'
+        AND COALESCE(d.stale_alert_sent, FALSE) = FALSE
+    `;
+    const { rows } = await db.query(sql);
+
+    if (!rows.length) {
       console.log('✅ Brak nieodpowiadających urządzeń');
       return;
     }
 
-    console.log(`⚠️  Znaleziono ${rows.length} urządzeń bez pomiaru > ${HRS}h`);
+    console.log(`⚠️  Znaleziono ${rows.length} urządzeń bez uplinku > ${HRS}h`);
+
     for (const d of rows) {
-      const msgTxt  = `⚠️ Czujnik do szamba nie odpowiada od ponad ${HRS}h! sprawdz antene  i czujnik`;
-      const mailSub = `⚠️ Czujnik szamba nie odpowiada`;
-  const mailHtml = `
-<!DOCTYPE html>
-<html lang="pl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Alert: Brak odpowiedzi z czujnika</title>
-</head>
-<body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial,sans-serif;">
-  <table role="presentation" style="width:100%; border-collapse:collapse;">
-    <tr>
-      <td align="center" style="padding:20px 0;">
-        <table role="presentation" style="width:600px; border-collapse:collapse; background-color:#ffffff; box-shadow:0 0 10px rgba(0,0,0,0.1);">
-          <!-- Logo -->
-          <tr>
-            <td align="center" style="padding:20px;">
-              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg"
-                   alt="TechioT Logo"
-                   style="max-width:150px; height:auto;">
-            </td>
-          </tr>
-          <!-- Nagłówek -->
-          <tr>
-            <td style="padding:0 20px; border-bottom:1px solid #eeeeee;">
-              <h2 style="color:#333333; font-size:24px; margin:0;">
-                ⚠️ Alert: Brak odpowiedzi z czujnika
-              </h2>
-            </td>
-          </tr>
-          <!-- Treść -->
-          <tr>
-            <td style="padding:20px;">
-              <p style="color:#555555; font-size:16px; line-height:1.5; margin-bottom:10px;">
-                Cześć,
-              </p>
-              <p style="color:#555555; font-size:16px; line-height:1.5; margin-bottom:10px;">
-                Twoje urządzenie <strong>${d.serial_number}</strong> nie wysłało pomiaru od ponad <strong>${HRS}&nbsp;godzin</strong>. Prosimy o:
-              </p>
-              <ul style="color:#555555; font-size:16px; line-height:1.5; margin:0 0 20px 20px; padding:0;">
-                <li style="margin-bottom:8px;">Sprawdzenie anteny</li>
-                <li style="margin-bottom:8px;">Weryfikację, czy urządzenie nie zostało uszkodzone przez firmę asenizacyjną</li>
-             
-              </ul>
-              <p style="color:#999999; font-size:12px; line-height:1.4; text-align:center; margin-top:30px;">
-                Ta wiadomość została wysłana automatycznie, prosimy na nią nie odpowiadać.
-              </p>
-            </td>
-          </tr>
-          <!-- Stopka -->
-          <tr>
-            <td align="center" style="padding:10px 20px; background-color:#fafafa;">
-              <p style="color:#777777; font-size:14px; margin:0;">
-                Pozdrawiamy,<br>
-                <strong>TechioT</strong>
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-`;
+      const type = String(d.device_type || 'septic').toLowerCase();
+      const lastSeen = d.last_seen_ts ? new Date(d.last_seen_ts).toISOString() : 'brak danych';
+      const titleByType = {
+        septic: 'Czujnik szamba nie odpowiada',
+        leak:   'Czujnik zalania nie odpowiada',
+        co:     'Czujnik CO nie odpowiada',
+      };
+      const smsTxtByType = {
+        septic: `⚠️ ${titleByType.septic} od ponad ${HRS}h (EUI ${d.serial_number}). Sprawdź antenę i zasilanie.`,
+        leak:   `⚠️ ${titleByType.leak} od ponad ${HRS}h (EUI ${d.serial_number}). Sprawdź czujnik i zasięg.`,
+        co:     `⚠️ ${titleByType.co} od ponad ${HRS}h (EUI ${d.serial_number}). Sprawdź czujnik i zasięg.`,
+      };
 
+      const emailSubj = `⚠️ ${titleByType[type] || titleByType.septic}`;
+      const emailHtml = `
+        <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
+          <h2>${emailSubj}</h2>
+          <p>Urządzenie <b>${d.name || '(bez nazwy)'} – ${d.serial_number}</b> nie wysłało żadnego uplinku od ponad <b>${HRS}h</b>.</p>
+          <ul>
+            <li>Ostatnio widziane: ${lastSeen}</li>
+            <li>Typ: ${type.toUpperCase()}</li>
+          </ul>
+          <p>Zalecenia: sprawdź antenę, zasilanie i miejsce montażu.</p>
+          <p style="color:#888;font-size:12px">Wiadomość automatyczna – prosimy nie odpowiadać.</p>
+        </div>
+      `;
 
-      // — SMS —
-      const nums = [normalisePhone(d.phone), normalisePhone(d.phone2)].filter(Boolean);
-      for (const n of nums) {
-        if (d.sms_limit > 0) {
-          try {
-            await sendSMS(n, msgTxt);
-            d.sms_limit--;
-          } catch (e) {
-            console.error('SMS error:', e.message);
+      // dobór numerów wg typu (z fallbackiem do standardowych phone/phone2)
+      const typedNumbers =
+        type === 'co'
+          ? [normalisePhone(d.co_phone1), normalisePhone(d.co_phone2)]
+          : type === 'leak'
+            ? [normalisePhone(d.leak_phone1), normalisePhone(d.leak_phone2)]
+            : [normalisePhone(d.phone), normalisePhone(d.phone2)];
+
+      const fallbackNumbers = [normalisePhone(d.phone), normalisePhone(d.phone2)];
+      const numbers = [...new Set([...typedNumbers.filter(Boolean), ...fallbackNumbers.filter(Boolean)])];
+
+      // SMS — uwzględnij DND
+      if (numbers.length && !d.do_not_disturb) {
+        for (const n of numbers) {
+          // atomowe zużycie puli
+          const left = await consumeSms(db, d.user_id, 1);
+          if (left === null) {
+            console.log(`⛔ Brak środków SMS (user=${d.user_id}) → pomijam wysyłkę do ${n}`);
+            break; // brak środków – nie próbujemy kolejnych numerów
           }
-        } else {
-          console.log(`ℹ️  sms_limit=0 → nie wysyłam SMS do ${n}`);
+          try {
+            await sendSMS(n, smsTxtByType[type] || smsTxtByType.septic);
+            console.log(`📨 SMS → ${n} (left=${left}) [${d.serial_number}]`);
+          } catch (e) {
+            // oddaj kredyt przy błędzie wysyłki (best effort)
+            await db.query('UPDATE users SET sms_limit = sms_limit + 1 WHERE id = $1', [d.user_id]).catch(()=>{});
+            console.error(`❌ SMS error to ${n}:`, e.message || e);
+          }
         }
-      }
-      if (nums.length) {
-        await db.query(
-          'UPDATE devices SET sms_limit = $1 WHERE id = $2',
-          [d.sms_limit, d.id]
-        );
+      } else if (d.do_not_disturb) {
+        console.log(`ℹ️ DND=true → nie wysyłam SMS (serial=${d.serial_number})`);
+      } else {
+        console.log(`ℹ️ Brak numerów telefonu dla ${d.serial_number}`);
       }
 
-      // — E-mail —
+      // E-mail (jeśli ustawiony)
       if (d.alert_email) {
         try {
-          await sendEmail(d.alert_email, mailSub, mailHtml);
+          await sendEmail(d.alert_email, emailSubj, emailHtml);
+          console.log(`✉️  E-mail → ${d.alert_email} [${d.serial_number}]`);
         } catch (e) {
-          console.error('E-mail error:', e.message);
+          console.error('❌ E-mail error:', e.message || e);
         }
       }
 
-      // — Ustawiamy flagę, że już wysłaliśmy alert dla tego urządzenia —
-      await db.query(
-        'UPDATE devices SET trigger_measurement = TRUE WHERE id = $1',
-        [d.id]
-      );
-      console.log(`✅ Alert wysłany i trigger_measurement=TRUE dla ${d.serial_number}`);
+      // oznacz jako zalertowane
+      await db.query('UPDATE devices SET stale_alert_sent = TRUE WHERE id = $1', [d.id]);
+      console.log(`✅ stale_alert_sent=TRUE → ${d.serial_number}`);
     }
+
+    console.log('🏁 Done.');
   } catch (err) {
-    console.error('❌ Błąd w check-stale-devices:', err);
-  } finally {
-    await db.end();
+    console.error('❌ check-stale-devices failed:', err);
   }
 })();

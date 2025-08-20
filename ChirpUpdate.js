@@ -46,7 +46,7 @@ module.exports = async function updateOnLns(serie, name, street) {
         {
           device: {
             applicationId: t.appId,
-            deviceProfileId: t.profileId,
+            
             name: devName,
             description: street,
             tags: {},
@@ -67,7 +67,7 @@ module.exports = async function updateOnLns(serie, name, street) {
           {
             device: {
               applicationId: t.appId,
-              deviceProfileId: t.profileId,
+             
               devEUI: serie,
               name: devName,
               description: street,

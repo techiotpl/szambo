@@ -1199,11 +1199,14 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
     if (!allowed.has(k)) {
       return res.status(400).send(`field ${k} not allowed`);
     }
-    if (typeof v !== 'string' || v.trim().length === 0) {
+    if (typeof v !== 'string') {
       return res.status(400).send(`invalid value for ${k}`);
     }
+    const s = v.trim();
+    // Pusty string ⇒ pomiń (nie aktualizuj tego pola, ale nie rób błędu)
+    if (s.length === 0) continue;
     cols.push(`${k} = $${i++}`);
-    vals.push(v.trim());
+    vals.push(s);
   }
 
   if (!cols.length) {

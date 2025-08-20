@@ -597,7 +597,7 @@ let clients = [];
  */
 function pruneClients() {
   clients = clients.filter(r => !r.writableEnded && !r.finished);
-  console.log(`ℹ️ Aktywnych klientów SSE: ${clients.length}`);
+ // console.log(`ℹ️ Aktywnych klientów SSE: ${clients.length}`);
 }
 
 /**
@@ -608,7 +608,7 @@ function sendEvent(payload) {
   pruneClients();
 
   if (clients.length === 0) {
-    console.log('ℹ️ Brak podłączonych klientów SSE – pomijam wysyłkę');
+ //   console.log('ℹ️ Brak podłączonych klientów SSE – pomijam wysyłkę');
     return;
   }
 
@@ -644,7 +644,7 @@ app.get('/events', (req, res) => {
 
   // 3) Dodajemy to `res` do listy aktywnych klientów
   clients.push(res);
-  console.log('➕ Nowy klient SSE podłączony, wszystkich:', clients.length);
+//  console.log('➕ Nowy klient SSE podłączony, wszystkich:', clients.length);
 
   // 4) Jeśli klient zamknie połączenie – usuwamy `res` z listy
   req.on('close', () => {
@@ -671,7 +671,7 @@ app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
       u.abonament_expiry         AS abonament_expiry,   -- globalna data
       d.street, d.sms_after_empty,
       -- pola CO:
-      d.co_phone1, d.co_phone2, d.co_threshold_ppm,
+      d.co_phone1, d.co_phone2, d.leak_phone1, d.leak_phone2, d.co_threshold_ppm,
       -- statusy informacyjne:
       d.co_status, d.co_ppm
     FROM devices d
@@ -719,7 +719,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'phone','phone2','tel_do_szambiarza','street',
     'red_cm','serial_number','serie_number','capacity',
     'alert_email','trigger_dist','sms_after_empty','device_type',
-    'co_phone1','co_phone2','co_threshold_ppm'
+    'co_phone1','co_phone2','leak_phone1','leak_phone2','co_threshold_ppm'
   ]);
   const allowedUser = new Set(['u.sms_limit','u.abonament_expiry']);
 
@@ -779,7 +779,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     }
 
     // telefony: pozwól wyczyścić → NULL
-    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2'].includes(k)) {
+    if (['phone','phone2','tel_do_szambiarza','co_phone1','co_phone2','leak_phone1','leak_phone2'].includes(k)) {
       if (v == null || String(v).trim() === '') { pushDev(k, null); continue; }
       if (typeof v !== 'string') return res.status(400).send(`Niepoprawny format dla pola: ${k}`);
       const nv = normalisePhone(v.replace(/\s+/g,''));
@@ -1664,6 +1664,8 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     // —— CO only:
     'co_phone1',
     'co_phone2',
+	'leak_phone1',
+    'leak_phone2',
     'co_threshold_ppm'
   ]);
 
@@ -1680,7 +1682,7 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
       `SELECT id, user_id, serial_number, device_type, name,
               phone, phone2, tel_do_szambiarza, alert_email,
               red_cm, capacity, street, do_not_disturb, sms_limit, sms_after_empty,
-              co_phone1, co_phone2, co_threshold_ppm
+              co_phone1, co_phone2,leak_phone1,leak_phone2, co_threshold_ppm
          FROM devices
         WHERE serial_number = $1 AND user_id = $2
         LIMIT 1`,
@@ -1701,7 +1703,7 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
 
     for (const [k, vRaw] of Object.entries(body)) {
       // TELEFONY – pozwól wyczyścić: "" lub null → NULL
-      if (['phone', 'phone2', 'tel_do_szambiarza', 'co_phone1', 'co_phone2'].includes(k)) {
+      if (['phone', 'phone2', 'tel_do_szambiarza', 'co_phone1', 'co_phone2','leak_phone1', 'leak_phone2'].includes(k)) {
         if (vRaw == null || String(vRaw).trim() === '') {
           pushCol(k, null);
           continue;

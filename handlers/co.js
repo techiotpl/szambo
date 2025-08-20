@@ -7,12 +7,6 @@ const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN  || '';
 const TWILIO_FLOW_SID    = process.env.TWILIO_FLOW_SID    || '';
 const TWILIO_FROM        = process.env.TWILIO_FROM        || '';
 
-function toBool(v) {
-  if (v === true || v === 1 || v === '1') return true;
-  if (typeof v === 'string') return ['true','t','yes','y','on','active'].includes(v.toLowerCase());
-  return false;
-}
-
 function normalizeE164(num) {
   const digits = String(num || '').replace(/[^\d+]/g, '');
   if (!digits) return null;
@@ -57,91 +51,63 @@ function batteryLevelToPct(level) {
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
-   
-
-
   const obj = body?.object || body?.data || body || {};
   const now = moment();
-
-    // Ujednolicone użycie numeru seryjnego (bez wywoływania jak funkcji)
   const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 1) ODCZYT wartości wg Nexelec-decoder (poprawione):
-  //    - alarm → z "localAlarm"/"preAlarm"
-  //    - ppm   → z "coConcentration.value"
-  //    - bateria → z "energyStatus" (string), bez zmiany battery_v w DB
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  const typeMsg = (obj.typeOfMessage || '').toString();
 
   // ppm (priorytet: coConcentration.value)
   let ppm = null;
   if (obj.coConcentration && typeof obj.coConcentration === 'object' && obj.coConcentration.value != null) {
-    // bywa, że value przychodzi jako string – Number() zadba o konwersję
     ppm = Number(obj.coConcentration.value);
   } else if (obj.co_ppm != null) {
     ppm = Number(obj.co_ppm);
   } else if (obj.co != null) {
-    ppm = Number(obj.co); // legacy
+    ppm = Number(obj.co);
   }
 
-  // alarm – według CO Alarm Status
-  let alarm = false;
-  let src = '';
-  if (typeMsg === 'CO Alarm Status') {
-    // "localAlarm" jest kluczowy (właściwy alarm), "preAlarm" to stan wstępny ≥ 40 ppm
-    if (typeof obj.localAlarm === 'string' && obj.localAlarm.toLowerCase() === 'active') {
-      alarm = true; src = 'localAlarm';
-    } else if (typeof obj.preAlarm === 'string' && obj.preAlarm.toLowerCase() === 'active') {
-      // jeśli chcesz, aby pre-alarm też wyzwalał alarm → zostaw; jeśli nie, usuń ten blok
-      alarm = true; src = 'preAlarm';
-    }
-  }
-
-  // Jeśli nie wykryto jawnego źródła alarmu, użyj progu ppm (fallback – jak wcześniej)
-  if (!src && ppm != null) {
-    const threshold = Number(dev.co_threshold_ppm || 50);
-    alarm = ppm >= threshold;
-    src = `ppm>=${threshold}`;
-  }
-
-  // Bateria:
-  //  • energyStatus: "High" | "Medium" | "Low" | "Critical"  → mapujemy na % (szacunek do UI)
-  //  • remainingProductLifetime: { value: <miesiące>, unit: "month" } → przekażemy w SSE (bez zapisu do DB)
-  const batteryLevel = obj.energyStatus || null;            // string lub null
-  const batteryPct   = batteryLevelToPct(batteryLevel);     // 80/40/8/1 (% – przybliżenie)
+  // battery
+  const batteryLevel = obj.energyStatus || null;
+  const batteryPct   = batteryLevelToPct(batteryLevel);
   const batteryMonthsLeft = (
     obj.remainingProductLifetime
     && typeof obj.remainingProductLifetime === 'object'
     && obj.remainingProductLifetime.value != null
   ) ? Number(obj.remainingProductLifetime.value) : null;
 
-  // Napięcie w V: zostawiamy jak było, jeśli przyjdzie "voltage", uaktualnimy battery_v; inaczej nie tykamy.
   const battV = obj.voltage != null ? Number(obj.voltage) : null;
 
+  // stan poprzedni
   const prev = !!dev.co_status;
-  const changed = alarm !== prev;
+  let alarm = prev;
 
-  // cooldown (opcjonalnie)
-  const cooldownMin = dev.co_alert_cooldown_min || 180;
-  const canAlert = !dev.co_last_alert_ts || now.diff(dev.co_last_alert_ts, 'minutes') >= cooldownMin;
+  // próg z urządzenia lub domyślny
+  const threshold = Number(dev.co_threshold_ppm || 50);
 
-  console.log(`[CO] RX ${serial} obj=${JSON.stringify(obj)}`);
+  // logika wejścia w alarm
+  if (ppm != null && ppm >= threshold) {
+    alarm = true;
+  }
+
+  // reset przy ppm <= 5
+  if (ppm != null && ppm <= 5 && prev === true) {
+    alarm = false;
+    await db.query(
+      `UPDATE devices
+          SET co_status = false,
+              co_last_change_ts = now(),
+              co_ppm = $1
+        WHERE id = $2`,
+      [ppm, dev.id]
+    );
+    console.log(`[CO] RESET alarm (ppm<=5) serial=${serial}`);
+  }
+
   console.log(
-    `[CO] PARSED serial=${serial} `
-    + `alarm=${alarm} (src=${src}) `
-    + `ppm=${ppm ?? 'n/a'} `
-    + `battV=${battV ?? 'n/a'} `
-    + `energyStatus=${batteryLevel ?? 'n/a'} `
-    + `monthsLeft=${batteryMonthsLeft ?? 'n/a'} `
-    + `prev=${prev} canAlert=${canAlert}`
+    `[CO] RX ${serial} obj=${JSON.stringify(obj)} → alarm=${alarm} ppm=${ppm ?? 'n/a'} prev=${prev}`
   );
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 2) Zmiana stanu → zapis + (ew.) alert
-  // ─────────────────────────────────────────────────────────────────────────────
-  if (changed) {
+  // jeśli zmiana stanu
+  if (alarm !== prev) {
     console.log(`[CO] CHANGE ${serial}: ${prev} → ${alarm}`);
     try {
       await db.query(
@@ -158,10 +124,9 @@ module.exports.handleUplink = async function (utils, dev, body) {
       console.error('[CO] DB update(change) error:', e);
     }
 
-    // ALERT tylko przy przejściu w alarm i po cooldownie
-    if (alarm && canAlert) {
+    // jeśli wchodzimy w alarm
+    if (!prev && alarm) {
       try {
-        // a) sprawdź globalny abonament/limit
         const { rows: [u] } = await db.query(
           `SELECT sms_limit,
                   abonament_expiry,
@@ -175,11 +140,11 @@ module.exports.handleUplink = async function (utils, dev, body) {
           return;
         }
         if (u.expired === true) {
-          console.log(`[CO] SKIP – abonament expired for user=${dev.user_id} (expiry=${u.abonament_expiry || 'NULL'})`);
+          console.log(`[CO] SKIP – abonament expired for user=${dev.user_id}`);
           return;
         }
 
-        // b) NUMERY: co_phone1/co_phone2 (oba, jeśli są), fallback: 1. numer z 'septic'
+        // numery do alarmu
         const targets = [dev.co_phone1, dev.co_phone2].map(normalisePhone).filter(Boolean);
         if (targets.length === 0) {
           const { rows: ph } = await db.query(
@@ -196,25 +161,24 @@ module.exports.handleUplink = async function (utils, dev, body) {
         }
 
         if (targets.length === 0) {
-          console.log(`[CO] SKIP – brak docelowych numerów (co_phone1/co_phone2 ani septic) u user_id=${dev.user_id}`);
+          console.log(`[CO] SKIP – brak numerów docelowych u user_id=${dev.user_id}`);
           return;
         }
 
-        // c) treść
-       const name = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
+        const name = (dev.name && String(dev.name).trim().length)
+          ? String(dev.name).trim()
+          : serial;
         const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
 
-        // d) wyślij do KAŻDEGO numeru z listy; każdy SMS pobiera 1 z globalnej puli
         for (const to of targets) {
           const ok = await sendSmsWithQuota(db, dev.user_id, to, msg, 'co');
           if (!ok) {
             console.log(`[CO] SKIP SMS → brak SMS w globalnej puli (user=${dev.user_id})`);
-            break; // skończyła się pula – przerwij
+            break;
           }
           await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
-          console.log(`[CO] SMS sent (global quota) → ${to}`);
+          console.log(`[CO] SMS sent → ${to}`);
 
-          // CALL po udanym SMS na ten sam numer
           const callOk = await twilioCallOnce(to);
           if (callOk) {
             await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
@@ -225,7 +189,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
       }
     }
   } else {
-    // ZAWSZE zaznacz ostatni uplink; ppm/battery tylko gdy przyszły
+    // brak zmiany – tylko update pól pomocniczych
     try {
       await db.query(
         `UPDATE devices
@@ -240,18 +204,15 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   }
 
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 3) SSE dla frontu — dodajemy battery_level (+ %), zostawiamy battery_v jak było
-  // ─────────────────────────────────────────────────────────────────────────────
+  // SSE do frontu
   sendEvent({
     serial,
     co: alarm,
     co_ppm: ppm,
-    battery_v: battV,              // napięcie jeśli przyjdzie
-    battery_level: batteryLevel,   // High/Medium/Low/Critical
-       battery_level_pct: batteryPct, // szacunek dla UI
-    battery_months_left: batteryMonthsLeft, // liczba miesięcy z remainingProductLifetime
+    battery_v: battV,
+    battery_level: batteryLevel,
+    battery_level_pct: batteryPct,
+    battery_months_left: batteryMonthsLeft,
     ts: now.toISOString()
   });
 };

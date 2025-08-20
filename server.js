@@ -257,6 +257,17 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS sms_limit         INT         DEFAU
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS do_not_disturb    BOOLEAN     DEFAULT FALSE;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS sms_after_empty   BOOLEAN     DEFAULT FALSE;
 
+-- LEAK (czujnik zalania)
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_phone1            TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_phone2            TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_status            BOOLEAN     DEFAULT FALSE;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_last_change_ts    TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_last_alert_ts     TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS leak_last_uplink_ts    TIMESTAMPTZ;
+
+
+
+
 -- CO (czujnik czadu)
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_phone1         TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_phone2         TEXT;
@@ -265,6 +276,8 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_status         BOOLEAN     DEFAU
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_ppm            INT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_last_change_ts TIMESTAMPTZ;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_last_alert_ts  TIMESTAMPTZ;
+-- CO (dopisz brakujący timestamp ostatniego uplinku)
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS co_last_uplink_ts      TIMESTAMPTZ;
 
 -- bateryjka (wspólna)
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_v         NUMERIC(5,2);

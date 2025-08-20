@@ -1,3 +1,4 @@
+// jobs/updateOnLns.js
 const axios = require('axios');
 
 const TARGETS = [
@@ -17,13 +18,21 @@ const TARGETS = [
   },
 ];
 
+// Normalizacja EUI (16-znakowy hex, wielkie litery)
+function normalizeDevEui(eui) {
+  return String(eui || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+}
+
 /**
  * Próbuje zaktualizować device w każdym z LNS.
- * Jeśli PUT zwróci 404, wykonuje POST.
- * Zwraca tablicę wyników: { ok, target, status, error? }.
+ * Jeśli PUT zwróci 404 (lub błąd z "expected length 32"), wykonuje POST.
  */
 module.exports = async function updateOnLns(serie, name, street) {
   const results = [];
+  const devEUI = normalizeDevEui(serie);
+  if (devEUI.length !== 16) {
+    return [{ ok: false, target: 'local', status: 0, error: `devEUI musi mieć 16 znaków HEX, dostałem "${devEUI}"` }];
+  }
 
   for (const t of TARGETS) {
     const token = (process.env[t.tokenEnv] || '').trim();
@@ -34,52 +43,53 @@ module.exports = async function updateOnLns(serie, name, street) {
 
     const headers = {
       Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`, // <— ważne: backticki!
     };
-    const devName = name && name.trim() ? name.trim() : serie;
+
+    const devName = (name && name.trim()) ? name.trim() : devEUI;
+
+    // UUID z i bez myślników
+    const appDashed = (t.appId || '').trim();
+    const profDashed = (t.profileId || '').trim();
+    const appSimple = appDashed.replace(/-/g, '');
+    const profSimple = profDashed.replace(/-/g, '');
+
+    // Jeden payload zgodny z obiema konwencjami nazw
+    const devicePayload = {
+      device: {
+        // oba warianty, backend wybierze właściwe:
+        applicationId: appDashed,
+        applicationID: appSimple,
+        deviceProfileId: profDashed,
+        deviceProfileID: profSimple,
+
+        devEUI: devEUI,           // podaj też przy PUT
+        name: devName,
+        description: street || '',
+        tags: {},
+        variables: {},
+      },
+    };
 
     try {
-      // Spróbuj PUT
-      const putUrl = `${t.base}/api/devices/${serie}`;
-      let resp = await axios.put(
-        putUrl,
-        {
-          device: {
-            applicationId: t.appId,
-            
-            name: devName,
-            description: street,
-            tags: {},
-            variables: {},
-          },
-        },
-        {
+      // 1) PUT (update, jeśli istnieje)
+      const putUrl = `${t.base}/api/devices/${devEUI}`;
+      let resp = await axios.put(putUrl, devicePayload, {
+        headers,
+        validateStatus: () => true,
+      });
+
+      const msg = (resp.data && (resp.data.message || resp.data.error)) || '';
+      const isLenErr = /expected length 32/i.test(msg);
+
+      // 2) Jeśli nie ma (404) albo walnął błąd z "expected length 32" → spróbuj POST (create)
+      if (resp.status === 404 || resp.status === 400 && isLenErr) {
+        const postUrl = `${t.base}/api/devices`;
+        resp = await axios.post(postUrl, devicePayload, {
           headers,
           validateStatus: () => true,
-        }
-      );
-
-      // Jeśli nie ma (404), spróbuj utworzyć
-      if (resp.status === 404) {
-        const postUrl = `${t.base}/api/devices`;
-        resp = await axios.post(
-          postUrl,
-          {
-            device: {
-              applicationId: t.appId,
-             
-              devEUI: serie,
-              name: devName,
-              description: street,
-              tags: {},
-              variables: {},
-            },
-          },
-          {
-            headers,
-            validateStatus: () => true,
-          }
-        );
+        });
       }
 
       const ok = String(resp.status).startsWith('2');
@@ -87,14 +97,14 @@ module.exports = async function updateOnLns(serie, name, street) {
         ok,
         target: t.name,
         status: resp.status,
-        error: ok ? undefined : (resp.data?.message || `HTTP ${resp.status}`),
+        error: ok ? undefined : (msg || `HTTP ${resp.status}`),
       });
-
     } catch (err) {
       results.push({
         ok: false,
         target: t.name,
-        error: err.message || 'unknown',
+        status: 0,
+        error: err.response?.data?.message || err.message || 'unknown',
       });
     }
   }

@@ -48,6 +48,22 @@ function batteryLevelToPct(level) {
   return null;
 }
 
+
+
+async function resetStaleAfterUplink(db, deviceId, tsIso) {
+  // resetuj „falę” nieaktywności i zapisz heartbeat w params.ts_seen
+  await db.query(
+    `UPDATE devices
+        SET stale_alert_sent = FALSE,
+            params = COALESCE(params, '{}'::jsonb)
+                     || jsonb_build_object('ts_seen', $2::text)
+      WHERE id = $1::uuid`,
+    [deviceId, tsIso]
+  );
+}
+
+
+
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 

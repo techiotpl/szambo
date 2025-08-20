@@ -1,12 +1,31 @@
 // handlers/leak.js
 const axios = require('axios');
 
+// ─────────────────────────────────────────────────────────────
+// Reset 48h-watchdoga na KAŻDYM uplinku (niezależnie od payloadu)
+async function resetStaleAfterUplink(db, deviceId, tsIso) {
+  await db.query(
+    `UPDATE devices
+        SET stale_alert_sent = FALSE,
+            params = COALESCE(params, '{}'::jsonb) || jsonb_build_object('ts_seen', $2)
+      WHERE id = $1`,
+    [deviceId, tsIso]
+  );
+}
+
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
   const obj = body?.object || body?.data || body || {};
   const now = moment();
   const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
+
+    // === RESET watchdoga po KAŻDYM uplinku ===
+  const tsIso =
+    (body?.ts && new Date(body.ts).toISOString()) ||
+    (body?.time && new Date(body.time).toISOString()) ||
+    new Date().toISOString();
+  await resetStaleAfterUplink(db, dev.id, tsIso);
 
   // ── 1) Parsowanie statusu ────────────────────────────────────────────
   let leak = false;
@@ -189,6 +208,6 @@ module.exports.handleUplink = async function (utils, dev, body) {
     leak,
     battery_v: battV,
     battery_pct: batteryPct,   // NOWE: % baterii z payloadu
-    ts: now.toISOString()      // „ostatni uplink” dla UI
+    ts: tsIso       // „ostatni uplink” dla UI
   });
 };

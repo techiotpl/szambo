@@ -2,11 +2,13 @@
 const axios = require('axios');
 
 module.exports.handleUplink = async function (utils, dev, body) {
-  const { db, sendSMS, sendEmail, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
-  const obj = body.object || {};
-  const now = moment();
+  const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
 
-  // ---- 1) Parsowanie statusu i baterii ---------------------------------
+  const obj = body?.object || body?.data || body || {};
+  const now = moment();
+  const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
+
+  // ── 1) Parsowanie statusu ────────────────────────────────────────────
   let leak = false;
   let src = 'unknown';
   let raw = null;
@@ -22,73 +24,21 @@ module.exports.handleUplink = async function (utils, dev, body) {
     raw = obj.leakage_status;
   }
 
-  const battV = obj.voltage !== undefined && obj.voltage !== null ? Number(obj.voltage) : null;
-
-  console.log(`[LEAK] RX ${dev.serial_number} obj=${JSON.stringify(obj)}`);
-  console.log(`[LEAK] PARSED serial=${dev.serial_number} leak=${leak} (src=${src}, val=${raw}) battV=${battV ?? 'n/a'} prev=${dev.leak_status === true}`);
+  // ── 2) Bateria ───────────────────────────────────────────────────────
+  // ChirpStack payload: { battery: 0..100 } oraz ewentualnie { voltage: "3.52" }
+  const batteryPct = (obj.battery != null) ? Math.max(0, Math.min(100, Number(obj.battery))) : null;
+  const battV = (obj.voltage != null) ? Number(obj.voltage) : null;
 
   const prev = dev.leak_status === true;
   const changed = leak !== prev;
 
-  // ---- 2) Helpery do Twilio CALL ---------------------------------------
-  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-  const TWILIO_FLOW_SID = process.env.TWILIO_FLOW_SID;
-  const TWILIO_FROM = process.env.TWILIO_FROM;
+  console.log(`[LEAK] RX ${serial} obj=${JSON.stringify(obj)}`);
+  console.log(`[LEAK] PARSED serial=${serial} leak=${leak} (src=${src}, val=${raw}) battV=${battV ?? 'n/a'} battery%=${batteryPct ?? 'n/a'} prev=${prev}`);
 
-  function normalizeE164(num) {
-    const digits = String(num || '').replace(/[^\d+]/g, '');
-    if (!digits) return null;
-    return digits.startsWith('+') ? digits : `+48${digits}`;
-  }
-
-  async function sendTwilioCall(toRaw) {
-    try {
-      if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FLOW_SID || !TWILIO_FROM) {
-        console.log('[LEAK] Twilio: brak konfiguracji env – pomijam CALL');
-        return false;
-      }
-
-      const to = normalizeE164(toRaw);
-      if (!to) {
-        console.log('[LEAK] Twilio: brak poprawnego numeru – pomijam CALL');
-        return false;
-      }
-
-      const url = `https://studio.twilio.com/v2/Flows/${TWILIO_FLOW_SID}/Executions`;
-      const payload = new URLSearchParams({
-        To: to,
-        From: TWILIO_FROM
-      }).toString();
-
-      const resp = await axios.post(url, payload, {
-        auth: {
-          username: TWILIO_ACCOUNT_SID,
-          password: TWILIO_AUTH_TOKEN
-        },
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        timeout: 15000
-      });
-
-      console.log(`[LEAK] Twilio CALL OK → to=${to}, executionSid=${resp.data?.sid || '?'}`);
-      return true;
-    } catch (e) {
-      const msg = e.response?.data ? JSON.stringify(e.response.data) : e.message;
-      console.error(`[LEAK] Twilio CALL ERR → ${msg}`);
-      return false;
-    }
-  }
-
-  // ---- 3) Akcja tylko przy zmianie normal → leak ------------------------
-  if (changed) {
-    console.log(`[LEAK] CHANGE ${dev.serial_number}: ${prev} → ${leak}`);
-  }
-
+  // ── 3) Alert: tylko na przejściu normal → leak ───────────────────────
   if (changed && leak === true) {
     try {
-      // a) globalny status abonamentu usera (SMS limit + czy wygasł)
+      // a) globalny status abonamentu/limit
       const { rows: [u] } = await db.query(
         `SELECT sms_limit,
                 abonament_expiry,
@@ -103,67 +53,142 @@ module.exports.handleUplink = async function (utils, dev, body) {
         return;
       }
 
-      // b) 1. zarejestrowany numer z urządzenia typu "septic"
-      const { rows: phones } = await db.query(
-        `SELECT phone
-           FROM devices
-          WHERE user_id = $1
-            AND device_type = 'septic'
-            AND phone IS NOT NULL AND LENGTH(TRIM(phone)) > 0
-          ORDER BY created_at ASC
-          LIMIT 1`,
-        [dev.user_id]
-      );
-      const phone = phones.length ? normalisePhone(phones[0].phone) : null;
-      if (!phone) {
-        console.log(`[LEAK] SKIP – brak zarejestrowanego numeru (septic) u user_id=${dev.user_id}`);
+      // b) Preferuj odrębne numery dla leak: leak_phone1/leak_phone2
+      let targets = [dev.leak_phone1, dev.leak_phone2].map(normalisePhone).filter(Boolean);
+
+      // fallback: jeśli brak, bierz pierwszy numer z urządzenia typu 'septic'
+      if (targets.length === 0) {
+        const { rows: ph } = await db.query(
+          `SELECT phone
+             FROM devices
+            WHERE user_id = $1
+              AND device_type = 'septic'
+              AND phone IS NOT NULL AND LENGTH(TRIM(phone)) > 0
+            ORDER BY created_at ASC
+            LIMIT 1`,
+          [dev.user_id]
+        );
+        if (ph.length) targets.push(normalisePhone(ph[0].phone));
+      }
+
+      if (targets.length === 0) {
+        console.log(`[LEAK] SKIP – brak numerów docelowych (leak_phone1/2 ani septic) u user_id=${dev.user_id}`);
         return;
       }
 
-      // c) treść
-      const devName = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : dev.serial_number;
-      const smsMsg  = `Wykryto zalanie – \${devName}. Sprawdź natychmiast!`;
+      const devName = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
+      const smsMsg  = `Wykryto zalanie – ${devName}. Sprawdź natychmiast!`;
 
-      // d) SMS z globalnej puli (users.sms_limit)
-      const ok = await sendSmsWithQuota(db, dev.user_id, phone, smsMsg, 'leak');
-      if (!ok) { console.log(`[LEAK] SKIP – brak SMS w globalnej puli user=${dev.user_id}`); return; }
-      await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
-      console.log(`[LEAK] SMS sent (global quota) → ${phone}`);
-
-      // e) po SMS – telefon (Twilio) na ten sam numer
-      const callOk = await sendTwilioCall(phone);
-      if (callOk) {
+      // d) SMS (z globalnej puli) + CALL na każdy numer
+      for (const to of targets) {
+        const ok = await sendSmsWithQuota(db, dev.user_id, to, smsMsg, 'leak');
+        if (!ok) {
+          console.log(`[LEAK] SKIP SMS → brak SMS w globalnej puli (user=${dev.user_id})`);
+          break; // skończyła się pula – przerywamy, aby nie dzwonić bez SMS
+        }
         await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
+        console.log(`[LEAK] SMS sent (global quota) → ${to}`);
+
+        // CALL po udanym SMS – jak w CO
+        await (async () => {
+          try {
+            const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+            const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;
+            const TWILIO_FLOW_SID    = process.env.TWILIO_FLOW_SID;
+            const TWILIO_FROM        = process.env.TWILIO_FROM;
+
+            const normalizeE164 = (num) => {
+              const digits = String(num || '').replace(/[^\d+]/g, '');
+              if (!digits) return null;
+              return digits.startsWith('+') ? digits : `+48${digits}`;
+            };
+
+            if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FLOW_SID || !TWILIO_FROM) {
+              console.log('[LEAK] Twilio: brak konfiguracji env – pomijam CALL');
+              return;
+            }
+            const toE164 = normalizeE164(to);
+            if (!toE164) return;
+
+            const url = `https://studio.twilio.com/v2/Flows/${TWILIO_FLOW_SID}/Executions`;
+            const payload = new URLSearchParams({ To: toE164, From: TWILIO_FROM }).toString();
+            const resp = await axios.post(url, payload, {
+              auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN },
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 15000
+            });
+            console.log(`[LEAK] Twilio CALL OK → ${toE164}, sid=${resp.data?.sid || '?'}`);
+            await db.query('UPDATE devices SET leak_last_alert_ts = now() WHERE id = $1', [dev.id]);
+          } catch (e) {
+            console.error('[LEAK] Twilio CALL ERR', e.response?.data || e.message);
+          }
+        })();
       }
     } catch (e) {
       console.error('[LEAK] ALERT block error:', e);
     }
   }
 
-  // ---- 4) Aktualizacja statusu/baterii w DB -----------------------------
+  // ── 4) Aktualizacja w DB (ostatni uplink + zmiany) ────────────────────
+  // Staramy się zapisać leak_last_uplink_ts; jeżeli kolumny brak (42703), robimy fallback bez niej.
   try {
     if (changed) {
-      await db.query(
-        `UPDATE devices 
-         SET leak_status = $1, leak_last_change_ts = now(), battery_v = COALESCE($2, battery_v) 
-         WHERE id = $3`,
-        [leak, battV, dev.id]
-      );
-    } else if (battV !== null) {
-      await db.query(
-        'UPDATE devices SET battery_v = $1 WHERE id = $2',
-        [battV, dev.id]
-      );
+      try {
+        await db.query(
+          `UPDATE devices
+              SET leak_status = $1,
+                  leak_last_change_ts = now(),
+                  leak_last_uplink_ts = now(),
+                  battery_v = COALESCE($2, battery_v)
+            WHERE id = $3`,
+          [leak, battV, dev.id]
+        );
+      } catch (e) {
+        if (e.code === '42703') {
+          await db.query(
+            `UPDATE devices
+                SET leak_status = $1,
+                    leak_last_change_ts = now(),
+                    battery_v = COALESCE($2, battery_v)
+              WHERE id = $3`,
+            [leak, battV, dev.id]
+          );
+        } else {
+          throw e;
+        }
+      }
+    } else {
+      try {
+        await db.query(
+          `UPDATE devices
+              SET leak_last_uplink_ts = now(),
+                  battery_v = COALESCE($1, battery_v)
+            WHERE id = $2`,
+          [battV, dev.id]
+        );
+      } catch (e) {
+        if (e.code === '42703') {
+          await db.query(
+            `UPDATE devices
+                SET battery_v = COALESCE($1, battery_v)
+              WHERE id = $2`,
+            [battV, dev.id]
+          );
+        } else {
+          throw e;
+        }
+      }
     }
   } catch (e) {
     console.error('[LEAK] DB update error:', e);
   }
 
-  // ---- 5) SSE do frontu -------------------------------------------------
+  // ── 5) SSE do frontu ──────────────────────────────────────────────────
   sendEvent({
-    serial: dev.serial_number,
+    serial,
     leak,
     battery_v: battV,
-    ts: now.toISOString()
+    battery_pct: batteryPct,   // NOWE: % baterii z payloadu
+    ts: now.toISOString()      // „ostatni uplink” dla UI
   });
 };

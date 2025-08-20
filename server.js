@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token);
 
 
+-- watchdog / stale alerts  --- zeby nie spamowało  po 48h
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS stale_alert_sent BOOLEAN DEFAULT FALSE;
+
 
 
 CREATE TABLE IF NOT EXISTS users (

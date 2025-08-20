@@ -8,6 +8,19 @@
 // body   → pełne payload z ChirpStack
 // ===========================================================================
 
+
+// Pomocnik: reset watchdoga na KAŻDYM uplinku (ts_seen + flaga)
+async function resetStaleAfterUplink(db, deviceId, tsIso) {
+  await db.query(
+    `UPDATE devices
+        SET stale_alert_sent = FALSE,
+            params = COALESCE(params, '{}'::jsonb) || jsonb_build_object('ts_seen', $2)
+      WHERE id = $1`,
+    [deviceId, tsIso]
+  );
+}
+
+
 module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const {
     db, sendSMS, sendEmail, sendEvent,
@@ -23,6 +36,15 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const issue0Only  = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
   const issue1Only  = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
   const nowIso      = new Date().toISOString();
+
+
+  // === RESET watchdoga po KAŻDYM uplinku ===
+  const tsIso =
+    (body?.ts && new Date(body.ts).toISOString()) ||
+    (body?.time && new Date(body.time).toISOString()) ||
+    new Date().toISOString();
+  await resetStaleAfterUplink(db, dev.id, tsIso);
+
 
   // ───────────────────────────── ISSUE = 1 (czujnik zabrudzony) ─────────────────────────────
   // To też jest uplink → aktualizujemy ts_seen, żeby UI/48h się odświeżyło.
@@ -64,6 +86,9 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     sendEvent({ serial: devEui, issue: 1, issue_ts: nowIso, ts_seen: nowIso, ts: nowIso, snr });
     return;
   }
+
+
+
 
   // ───────────────────────────── ISSUE = 0 (zły pomiar) ─────────────────────────────
   // Reagujemy TYLKO, gdy to jedyne pole (brak distance/voltage).
@@ -149,10 +174,7 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
                street, stale_alert_sent, alert_email
   `, [dev.id, distance, JSON.stringify(varsToSave)]);
 
-  // jeżeli czujnik znowu nadaje – skasuj znacznik 72 h alertu
-  if (row.stale_alert_sent) {
-    await db.query('UPDATE devices SET stale_alert_sent = FALSE WHERE id=$1',[dev.id]);
-  }
+
 
   // ─────────────── DETEKCJA OPRÓŻNIENIA (flaga TRUE → FALSE) ──────────────
   if (dev.trigger_dist && !row.new_flag) {

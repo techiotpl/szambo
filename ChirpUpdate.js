@@ -18,14 +18,31 @@ const TARGETS = [
   },
 ];
 
-// Normalizacja EUI (16-znakowy hex, wielkie litery)
+// 16 hex, wielkie litery
 function normalizeDevEui(eui) {
   return String(eui || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
 }
 
+// wyciąga nazwy pól z odpowiedzi (ChirpStack/Helium różnie nazywają camelCase/idCase)
+function pickIdFieldNames(deviceObj = {}) {
+  const has = (k) => Object.prototype.hasOwnProperty.call(deviceObj, k);
+  const appKey   = has('applicationId')   ? 'applicationId'   : (has('applicationID')   ? 'applicationID'   : null);
+  const profKey  = has('deviceProfileId') ? 'deviceProfileId' : (has('deviceProfileID') ? 'deviceProfileID' : null);
+  const devEuiKey= has('devEUI')          ? 'devEUI'          : (has('devEui')          ? 'devEui'          : 'devEUI');
+  return { appKey, profKey, devEuiKey };
+}
+
+// GET urządzenia z LNS
+async function getDevice(t, devEUI, headers) {
+  const url = `${t.base}/api/devices/${devEUI}`;
+  const resp = await axios.get(url, { headers, validateStatus: () => true });
+  return resp;
+}
+
 /**
- * Próbuje zaktualizować device w każdym z LNS.
- * Jeśli PUT zwróci 404 (lub błąd z "expected length 32"), wykonuje POST.
+ * Aktualizuje nazwę/opis w LNS bez zmiany profilu:
+ *  - jeśli device istnieje → PUT z tym samym applicationId/deviceProfileId (skopiowanymi z GET)
+ *  - jeśli nie istnieje (404/len err) → POST (z appId/profileId z TARGETS)
  */
 module.exports = async function updateOnLns(serie, name, street) {
   const results = [];
@@ -37,74 +54,85 @@ module.exports = async function updateOnLns(serie, name, street) {
   for (const t of TARGETS) {
     const token = (process.env[t.tokenEnv] || '').trim();
     if (!token) {
-      results.push({ ok: false, target: t.name, error: 'brak tokenu' });
+      results.push({ ok: false, target: t.name, status: 0, error: 'brak tokenu' });
       continue;
     }
-
     const headers = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`, // <— ważne: backticki!
+      Authorization: `Bearer ${token}`,
     };
-
     const devName = (name && name.trim()) ? name.trim() : devEUI;
-
-    // UUID z i bez myślników
-    const appDashed = (t.appId || '').trim();
-    const profDashed = (t.profileId || '').trim();
-    const appSimple = appDashed.replace(/-/g, '');
-    const profSimple = profDashed.replace(/-/g, '');
-
-    // Jeden payload zgodny z obiema konwencjami nazw
-    const devicePayload = {
-      device: {
-        // oba warianty, backend wybierze właściwe:
-        applicationId: appDashed,
-        applicationID: appSimple,
-        deviceProfileId: profDashed,
-        deviceProfileID: profSimple,
-
-        devEUI: devEUI,           // podaj też przy PUT
-        name: devName,
-        description: street || '',
-        tags: {},
-        variables: {},
-      },
-    };
+    const description = street || '';
 
     try {
-      // 1) PUT (update, jeśli istnieje)
-      const putUrl = `${t.base}/api/devices/${devEUI}`;
-      let resp = await axios.put(putUrl, devicePayload, {
-        headers,
-        validateStatus: () => true,
-      });
+      // 1) Spróbuj odczytać aktualną definicję, żeby NIE zmieniać profilu
+      const getResp = await getDevice(t, devEUI, headers);
 
-      const msg = (resp.data && (resp.data.message || resp.data.error)) || '';
-      const isLenErr = /expected length 32/i.test(msg);
+      // a) ISTNIEJE → PUT z tymi samymi ID (tylko name/description)
+      if (String(getResp.status).startsWith('2') && getResp.data) {
+        const devObj = getResp.data.device || getResp.data;
+        const { appKey, profKey, devEuiKey } = pickIdFieldNames(devObj);
 
-      // 2) Jeśli nie ma (404) albo walnął błąd z "expected length 32" → spróbuj POST (create)
-      if (resp.status === 404 || resp.status === 400 && isLenErr) {
-        const postUrl = `${t.base}/api/devices`;
-        resp = await axios.post(postUrl, devicePayload, {
-          headers,
-          validateStatus: () => true,
+        // składamy payload tak, aby skopiować identyfikatory dokładnie w tej samej konwencji
+        const devicePayload = { device: {} };
+        devicePayload.device[devEuiKey] = devEUI;
+        if (appKey && devObj[appKey])  devicePayload.device[appKey]  = devObj[appKey];
+        if (profKey && devObj[profKey]) devicePayload.device[profKey] = devObj[profKey];
+        devicePayload.device.name = devName;
+        devicePayload.device.description = description;
+
+        const putUrl = `${t.base}/api/devices/${devEUI}`;
+        const putResp = await axios.put(putUrl, devicePayload, { headers, validateStatus: () => true });
+
+        const ok = String(putResp.status).startsWith('2');
+        results.push({
+          ok,
+          target: t.name,
+          status: putResp.status,
+          error: ok ? undefined : (putResp.data?.message || putResp.data?.error || `HTTP ${putResp.status}`),
         });
+        continue;
       }
 
-      const ok = String(resp.status).startsWith('2');
+      // b) NIE ISTNIEJE → POST (tu trzeba podać app/profile z konfiguracji)
+      const appDashed  = (t.appId || '').trim();
+      const profDashed = (t.profileId || '').trim();
+      const appSimple  = appDashed.replace(/-/g, '');
+      const profSimple = profDashed.replace(/-/g, '');
+
+      const createPayload = {
+        device: {
+          // podajemy oba warianty, backend wybierze właściwy
+          applicationId: appDashed,
+          applicationID: appSimple,
+          deviceProfileId: profDashed,
+          deviceProfileID: profSimple,
+          devEUI: devEUI,
+          name: devName,
+          description,
+          tags: {},
+          variables: {},
+        },
+      };
+
+      const postUrl = `${t.base}/api/devices`;
+      const postResp = await axios.post(postUrl, createPayload, { headers, validateStatus: () => true });
+
+      const msg = postResp.data && (postResp.data.message || postResp.data.error);
+      const ok = String(postResp.status).startsWith('2');
       results.push({
         ok,
         target: t.name,
-        status: resp.status,
-        error: ok ? undefined : (msg || `HTTP ${resp.status}`),
+        status: postResp.status,
+        error: ok ? undefined : (msg || `HTTP ${postResp.status}`),
       });
     } catch (err) {
       results.push({
         ok: false,
         target: t.name,
-        status: 0,
-        error: err.response?.data?.message || err.message || 'unknown',
+        status: err.response?.status || 0,
+        error: err.response?.data?.message || err.response?.data?.error || err.message || 'unknown',
       });
     }
   }

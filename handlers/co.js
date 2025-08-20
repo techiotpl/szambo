@@ -55,6 +55,13 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const now = moment();
   const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
 
+    // === RESET watchdoga po KAŻDYM uplinku ===
+  const tsIso =
+    (body?.ts && new Date(body.ts).toISOString()) ||
+    (body?.time && new Date(body.time).toISOString()) ||
+    new Date().toISOString();
+  await resetStaleAfterUplink(db, dev.id, tsIso);
+
   // ppm (priorytet: coConcentration.value)
   let ppm = null;
   if (obj.coConcentration && typeof obj.coConcentration === 'object' && obj.coConcentration.value != null) {
@@ -213,6 +220,6 @@ module.exports.handleUplink = async function (utils, dev, body) {
     battery_level: batteryLevel,
     battery_level_pct: batteryPct,
     battery_months_left: batteryMonthsLeft,
-    ts: now.toISOString()
+    ts: tsIso
   });
 };

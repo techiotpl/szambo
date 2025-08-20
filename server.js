@@ -676,7 +676,8 @@ app.get('/events', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/device/:serial/params', auth, consentGuard, async (req,res)=> {
   const { serial } = req.params;
-  const q = `
+      
+    const q = `
     SELECT
       d.name,
       d.phone, d.phone2, d.tel_do_szambiarza, d.capacity, d.alert_email,
@@ -730,6 +731,21 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
   if (!devRows.length) return res.status(404).send('Device not found');
   const { id: deviceId, user_id: userId } = devRows[0];
 
+  const { rows: typeRow } = await db.query(
+    'SELECT device_type FROM devices WHERE id = $1',
+    [deviceId]
+  );
+  const currentType = (typeRow[0]?.device_type || '').toLowerCase();
+  const isSeptic = currentType === 'septic';
+  const isLeak   = currentType === 'leak';
+  const isCO     = currentType === 'co';
+
+  const septicOnly = new Set([
+    'phone','phone2','tel_do_szambiarza','red_cm','capacity','sms_after_empty'
+  ]);
+  const leakOnly = new Set(['leak_phone1','leak_phone2']);
+  const coOnly   = new Set(['co_phone1','co_phone2','co_threshold_ppm']);
+
   // 2) Zestawy pól
   const allowedDevice = new Set([
     'phone','phone2','tel_do_szambiarza','street',
@@ -776,7 +792,11 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     if (!allowedDevice.has(k)) {
       return res.status(400).send(`Niedozwolone pole: ${k}`);
     }
-
+    // zablokuj edycję pól niepasujących do bieżącego typu (anty-cross update)
+    if (septicOnly.has(k) && !isSeptic) continue;
+    if (leakOnly.has(k)   && !isLeak)   continue;
+    if (coOnly.has(k)     && !isCO)     continue;
+	  
     // alias: serie_number → serial_number
     if (k === 'serie_number') {
       if (!/^[0-9A-Fa-f]{16}$/.test(String(v||'').trim())) {
@@ -858,6 +878,15 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     await client.query('BEGIN');
 
     if (devCols.length) {
+		      try {
+        console.log(
+          '[PATCH /admin/device/%s/params] type=%s devFields=%j userFields=%j',
+          serial,
+          currentType,
+          devCols.map(c => c.split('=')[0].trim()),
+          userCols.map(c => c.split('=')[0].trim())
+        );
+      } catch {}
       // UWAGA: szukamy po starym serialu z :param
       const q = `UPDATE devices SET ${devCols.join(', ')} WHERE serial_number = $${iDev}`;
       await client.query(q, [...devVals, serial]);
@@ -1713,6 +1742,17 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     }
     const before = beforeRows[0];
 
+    const isSeptic = (before.device_type || '').toLowerCase() === 'septic';
+    const isLeak   = (before.device_type || '').toLowerCase() === 'leak';
+    const isCO     = (before.device_type || '').toLowerCase() === 'co';
+
+    // pola specyficzne dla typów
+    const septicOnly = new Set([
+      'phone','phone2','tel_do_szambiarza','red_cm','capacity','sms_after_empty'
+    ]);
+    const leakOnly = new Set(['leak_phone1','leak_phone2']);
+    const coOnly   = new Set(['co_phone1','co_phone2','co_threshold_ppm'])
+
     // 2) Zbuduj UPDATE z walidacją wartości
     const cols = [];
     const vals = [];
@@ -1721,6 +1761,10 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
     const pushCol = (k, v) => { cols.push(`${k} = $${i++}`); vals.push(v); };
 
     for (const [k, vRaw] of Object.entries(body)) {
+		      // Odrzuć pola niepasujące do typu urządzenia
+      if (septicOnly.has(k) && !isSeptic) continue;
+      if (leakOnly.has(k)   && !isLeak)   continue;
+      if (coOnly.has(k)     && !isCO)     continue;
       // TELEFONY – pozwól wyczyścić: "" lub null → NULL
       if (['phone', 'phone2', 'tel_do_szambiarza', 'co_phone1', 'co_phone2','leak_phone1', 'leak_phone2'].includes(k)) {
         if (vRaw == null || String(vRaw).trim() === '') {
@@ -1803,7 +1847,16 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
       return res.status(400).send('Brak danych do aktualizacji');
     }
 
-    // 3) Wykonaj UPDATE
+      // 3) Log i UPDATE
+    try {
+      console.log(
+        '[PATCH /device/%s/params] (user=%s) type=%s fields=%j',
+        serial,
+        req.user.email,
+        before.device_type,
+        cols.map(c => c.split('=')[0].trim())
+      );
+    } catch {}
     vals.push(serial, req.user.id);
     const q = `
       UPDATE devices

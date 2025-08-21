@@ -8,6 +8,23 @@
 // body   → pełne payload z ChirpStack
 // ===========================================================================
 
+// Uniwersalny ekstraktor czasu z payloadu (ChirpStack/TTS/Helium)
+function extractUplinkIso(body) {
+  const cands = [
+    body?.time,                         // TTS/TTN / ChirpStack (czas sieci)
+    body?.receivedAt,                   // niektóre brokery
+    body?.uplink_received_at,           // alternatywa
+    body?.rxInfo?.[0]?.time,            // CS v4 (camelCase)
+    body?.rx_info?.[0]?.time,           // CS v4 (snake_case)
+    body?.object?.ts,                   // jeśli dekoder podał ts
+  ];
+  for (const v of cands) {
+    if (!v) continue;
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
 
 // Pomocnik: reset watchdoga na KAŻDYM uplinku (ts_seen + flaga)
 async function resetStaleAfterUplink(db, deviceId, tsIso) {
@@ -35,14 +52,11 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const keys        = Object.keys(obj || {});
   const issue0Only  = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
   const issue1Only  = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
-  const nowIso      = new Date().toISOString();
+  const tsIso       = extractUplinkIso(body);   // ⟵ spójny czas uplinku
 
 
   // === RESET watchdoga po KAŻDYM uplinku ===
-  const tsIso =
-    (body?.ts && new Date(body.ts).toISOString()) ||
-    (body?.time && new Date(body.time).toISOString()) ||
-    new Date().toISOString();
+
   await resetStaleAfterUplink(db, dev.id, tsIso);
 
 
@@ -59,7 +73,7 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
                        || jsonb_build_object('issue','1','issue_ts',$2::text,'ts_seen',$2::text)
                        || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
         WHERE id = $1`,
-      [dev.id, nowIso, snr]
+      [dev.id, tsIso, snr]
     );
 
     // 2) powiadomienia
@@ -83,7 +97,7 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     catch (err) { /* ignore */ }
 
     // 3) SSE – podajemy ts_seen (i ts dla kompatybilności z frontem)
-    sendEvent({ serial: devEui, issue: 1, issue_ts: nowIso, ts_seen: nowIso, ts: nowIso, snr });
+   sendEvent({ serial: devEui, issue: 1, issue_ts: tsIso, ts_seen: tsIso, ts: tsIso, snr });
     return;
   }
 
@@ -96,13 +110,13 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     await db.query(
       `UPDATE devices
           SET params = COALESCE(params,'{}'::jsonb)
-                       || jsonb_build_object('issue','0','issue_ts',$2::text,'ts_seen',$2::text)
+                      || jsonb_build_object('issue','0','issue_ts',$2::text,'ts_seen',$2::text)
                        || jsonb_strip_nulls(jsonb_build_object('snr',$3::numeric))
         WHERE id = $1`,
-      [dev.id, nowIso, snr]
+       [dev.id, tsIso, snr]
     );
     // SSE – odśwież UI i 48h
-    sendEvent({ serial: devEui, issue: 0, issue_ts: nowIso, ts_seen: nowIso, ts: nowIso, snr });
+    sendEvent({ serial: devEui, issue: 0, issue_ts: tsIso, ts_seen: tsIso, ts: tsIso, snr });
     return;
   }
 
@@ -129,8 +143,8 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
       distance,
       snr,
       voltage,
-      ts: nowIso,        // ostatni „dobry” – tu także dobry
-      ts_seen: nowIso    // „ostatnio widziany uplink”
+      ts: tsIso,         // ostatni „dobry” (jeśli był)
+      ts_seen: tsIso     // „ostatnio widziany uplink”
     };
     await db.query(
       `UPDATE devices
@@ -138,13 +152,27 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
         WHERE id = $1`,
       [dev.id, JSON.stringify(paramsNow)]
     );
-    sendEvent({ serial: devEui, distance, voltage, snr, ts: nowIso, ts_seen: nowIso });
+    sendEvent({ serial: devEui, distance, voltage, snr, ts: tsIso, ts_seen: tsIso });
     return; // DND: nie liczymy progów, nie wysyłamy alertów
   }
 
-  // Jeżeli mimo wszystko brak odległości → nic więcej nie robimy
+  // Jeżeli mimo wszystko brak odległości → zapisz ts_seen + meta i wyjdź
   if (distance === null) {
-    // (gdyby kiedyś przyszło voltage bez distance – nie countujemy progów itd.)
+    await db.query(
+      `UPDATE devices
+          SET params = (
+                COALESCE(params,'{}') - 'issue' - 'issue_ts'
+              ) || jsonb_strip_nulls(
+                    jsonb_build_object(
+                      'ts_seen', $2::text,
+                      'snr',     $3::numeric,
+                      'voltage', $4::numeric
+                    )
+                 )
+        WHERE id = $1`,
+      [dev.id, tsIso, snr, voltage]
+    );
+    sendEvent({ serial: devEui, voltage, snr, ts_seen: tsIso });
     return;
   }
 
@@ -153,8 +181,8 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     distance,
     snr,
     voltage,
-    ts: nowIso,        // ostatni DOBRY
-    ts_seen: nowIso    // ostatnio widziany uplink (tu też DOBRY)
+    ts: tsIso,         // ostatni DOBRY
+    ts_seen: tsIso     // ostatnio widziany uplink (tu też DOBRY)
   };
 
   const { rows:[row] } = await db.query(`
@@ -268,7 +296,7 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
   }
 
   // ─────────────── SSE do front-endu ──────────────────────────────────────
-  sendEvent({ serial: devEui, distance, voltage, snr, ts: nowIso, ts_seen: nowIso });
+  sendEvent({ serial: devEui, distance, voltage, snr, ts: tsIso, ts_seen: tsIso });
 
   return;   // wszystko OK
 };

@@ -2,6 +2,25 @@
 const axios = require('axios');
 
 // ─────────────────────────────────────────────────────────────
+// Uniwersalny czas uplinku (różne brokery / różne pola czasu)
+function extractUplinkIso(body) {
+  const c = [
+    body?.time,
+    body?.receivedAt,
+    body?.uplink_received_at,
+    body?.rxInfo?.[0]?.time,
+    body?.rx_info?.[0]?.time,
+    body?.object?.ts,
+  ];
+  for (const v of c) {
+    if (!v) continue;
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
+
+// ─────────────────────────────────────────────────────────────
 // Reset 48h-watchdoga na KAŻDYM uplinku (niezależnie od payloadu)
 async function resetStaleAfterUplink(db, deviceId, tsIso) {
   await db.query(
@@ -20,11 +39,8 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const now = moment();
   const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
 
-    // === RESET watchdoga po KAŻDYM uplinku ===
-  const tsIso =
-    (body?.ts && new Date(body.ts).toISOString()) ||
-    (body?.time && new Date(body.time).toISOString()) ||
-    new Date().toISOString();
+  // === RESET watchdoga po KAŻDYM uplinku ===
+  const tsIso = extractUplinkIso(body);
   await resetStaleAfterUplink(db, dev.id, tsIso);
 
   // ── 1) Parsowanie statusu ────────────────────────────────────────────
@@ -149,7 +165,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   }
 
   // ── 4) Aktualizacja w DB (ostatni uplink + zmiany) ────────────────────
-  // Staramy się zapisać leak_last_uplink_ts; jeżeli kolumny brak (42703), robimy fallback bez niej.
+  // Staramy się zapisać leak_last_uplink_ts = tsIso; jeżeli kolumny brak (42703), fallback bez niej.
   try {
     if (changed) {
       try {
@@ -157,10 +173,10 @@ module.exports.handleUplink = async function (utils, dev, body) {
           `UPDATE devices
               SET leak_status = $1,
                   leak_last_change_ts = now(),
-                  leak_last_uplink_ts = now(),
-                  battery_v = COALESCE($2, battery_v)
-            WHERE id = $3`,
-          [leak, battV, dev.id]
+                  leak_last_uplink_ts = $2::timestamptz,
+                  battery_v = COALESCE($3, battery_v)
+            WHERE id = $4`,
+          [leak, tsIso, battV, dev.id]
         );
       } catch (e) {
         if (e.code === '42703') {
@@ -180,10 +196,10 @@ module.exports.handleUplink = async function (utils, dev, body) {
       try {
         await db.query(
           `UPDATE devices
-              SET leak_last_uplink_ts = now(),
-                  battery_v = COALESCE($1, battery_v)
-            WHERE id = $2`,
-          [battV, dev.id]
+              SET leak_last_uplink_ts = $1::timestamptz,
+                  battery_v = COALESCE($2, battery_v)
+            WHERE id = $3`,
+          [tsIso, battV, dev.id]
         );
       } catch (e) {
         if (e.code === '42703') {
@@ -207,7 +223,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
     serial,
     leak,
     battery_v: battV,
-    battery_pct: batteryPct,   // NOWE: % baterii z payloadu
-    ts: tsIso       // „ostatni uplink” dla UI
+    battery_pct: batteryPct,   // % baterii z payloadu (jeśli był)
+    ts: tsIso                  // „ostatni uplink” dla UI
   });
 };

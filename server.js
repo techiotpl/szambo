@@ -330,6 +330,12 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS sms_limit INT DEFAULT 30,
   ADD COLUMN IF NOT EXISTS abonament_expiry DATE;
 
+-- Domyślka: nowi userzy dostają 365 dni od dziś
+ALTER TABLE users
+  ALTER COLUMN abonament_expiry
+  SET DEFAULT (CURRENT_DATE + INTERVAL '365 days')::date;
+
+
 -- Jednorazowe wypełnienie z devices (max z urządzeń, żeby nic nie „uciąć”):
 UPDATE users u
 SET sms_limit = x.sms_limit,
@@ -1452,6 +1458,17 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
         userId = insU.rows[0].id;
         userCreated = true;
         console.log(`✅  created user ${em} (id=${userId})`);
+
+    // nadaj globalny abonament na 365 dni (gdyby default nie zadziałał)
+    await client.query(
+      `UPDATE users
+          SET abonament_expiry = COALESCE(abonament_expiry, CURRENT_DATE) + INTERVAL '365 days',
+              sms_limit = COALESCE(sms_limit, 30)
+        WHERE id = $1`,
+      [userId]
+    );
+
+		  
       }
 
       // 3) wstaw urządzenie (serial unik.)

@@ -47,7 +47,23 @@ function batteryLevelToPct(level) {
   if (l === 'critical') return 1;  // <1%
   return null;
 }
-
+// uniwersalny czas uplinku (różne brokery)
+function extractUplinkIso(body) {
+  const c = [
+    body?.time,
+    body?.receivedAt,
+    body?.uplink_received_at,
+    body?.rxInfo?.[0]?.time,
+    body?.rx_info?.[0]?.time,
+    body?.object?.ts,
+  ];
+  for (const v of c) {
+   if (!v) continue;
+      const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
 
 
 async function resetStaleAfterUplink(db, deviceId, tsIso) {
@@ -71,11 +87,8 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const now = moment();
   const serial = String(dev.serial_number || dev.eui || dev.serial || '').toUpperCase();
 
-    // === RESET watchdoga po KAŻDYM uplinku ===
-  const tsIso =
-    (body?.ts && new Date(body.ts).toISOString()) ||
-    (body?.time && new Date(body.time).toISOString()) ||
-    new Date().toISOString();
+  // === RESET watchdoga po KAŻDYM uplinku ===
+  const tsIso = extractUplinkIso(body);
   await resetStaleAfterUplink(db, dev.id, tsIso);
 
   // ppm (priorytet: coConcentration.value)
@@ -137,11 +150,11 @@ module.exports.handleUplink = async function (utils, dev, body) {
         `UPDATE devices
             SET co_status = $1,
                 co_last_change_ts = now(),
-                co_last_uplink_ts = now(),
-                co_ppm = COALESCE($2, co_ppm),
-                battery_v = COALESCE($3, battery_v)
-          WHERE id = $4`,
-        [alarm, ppm, battV, dev.id]
+                co_last_uplink_ts = $2::timestamptz,
+                co_ppm = COALESCE($3, co_ppm),
+                battery_v = COALESCE($4, battery_v)
+          WHERE id = $5`,
+        [alarm, tsIso, ppm, battV, dev.id]
       );
     } catch (e) {
       console.error('[CO] DB update(change) error:', e);
@@ -213,14 +226,13 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   } else {
     // brak zmiany – tylko update pól pomocniczych
-    try {
       await db.query(
         `UPDATE devices
-            SET co_last_uplink_ts = now(),
-                co_ppm = COALESCE($1, co_ppm),
-                battery_v = COALESCE($2, battery_v)
-          WHERE id = $3`,
-        [ppm, battV, dev.id]
+            SET co_last_uplink_ts = $1::timestamptz,
+                co_ppm = COALESCE($2, co_ppm),
+                battery_v = COALESCE($3, battery_v)
+          WHERE id = $4`,
+        [tsIso, ppm, battV, dev.id]
       );
     } catch (e) {
       console.error('[CO] DB update(no-change) error:', e);

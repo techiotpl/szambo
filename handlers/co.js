@@ -47,6 +47,7 @@ function batteryLevelToPct(level) {
   if (l === 'critical') return 1;  // <1%
   return null;
 }
+
 // uniwersalny czas uplinku (różne brokery)
 function extractUplinkIso(body) {
   const c = [
@@ -58,13 +59,12 @@ function extractUplinkIso(body) {
     body?.object?.ts,
   ];
   for (const v of c) {
-   if (!v) continue;
-      const d = new Date(v);
+    if (!v) continue;
+    const d = new Date(v);
     if (!Number.isNaN(d.getTime())) return d.toISOString();
   }
   return new Date().toISOString();
 }
-
 
 async function resetStaleAfterUplink(db, deviceId, tsIso) {
   // resetuj „falę” nieaktywności i zapisz heartbeat w params.ts_seen
@@ -77,8 +77,6 @@ async function resetStaleAfterUplink(db, deviceId, tsIso) {
     [deviceId, tsIso]
   );
 }
-
-
 
 module.exports.handleUplink = async function (utils, dev, body) {
   const { db, sendEvent, normalisePhone, moment, sendSmsWithQuota } = utils;
@@ -207,47 +205,4 @@ module.exports.handleUplink = async function (utils, dev, body) {
         const msg  = `ALARM CO: ${name}${ppm != null ? ` (${ppm} ppm)` : ''}. Natychmiast przewietrz i opuść pomieszczenie!`;
 
         for (const to of targets) {
-          const ok = await sendSmsWithQuota(db, dev.user_id, to, msg, 'co');
-          if (!ok) {
-            console.log(`[CO] SKIP SMS → brak SMS w globalnej puli (user=${dev.user_id})`);
-            break;
-          }
-          await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
-          console.log(`[CO] SMS sent → ${to}`);
-
-          const callOk = await twilioCallOnce(to);
-          if (callOk) {
-            await db.query('UPDATE devices SET co_last_alert_ts = now() WHERE id = $1', [dev.id]);
-          }
-        }
-      } catch (e) {
-        console.error('[CO] ALERT block error:', e);
-      }
-    }
-  } else {
-    // brak zmiany – tylko update pól pomocniczych
-      await db.query(
-        `UPDATE devices
-            SET co_last_uplink_ts = $1::timestamptz,
-                co_ppm = COALESCE($2, co_ppm),
-                battery_v = COALESCE($3, battery_v)
-          WHERE id = $4`,
-        [tsIso, ppm, battV, dev.id]
-      );
-    } catch (e) {
-      console.error('[CO] DB update(no-change) error:', e);
-    }
-  }
-
-  // SSE do frontu
-  sendEvent({
-    serial,
-    co: alarm,
-    co_ppm: ppm,
-    battery_v: battV,
-    battery_level: batteryLevel,
-    battery_level_pct: batteryPct,
-    battery_months_left: batteryMonthsLeft,
-    ts: tsIso
-  });
-};
+          const ok = await sendSmsWithQuota(db, dev.us

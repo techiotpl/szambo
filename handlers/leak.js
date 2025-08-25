@@ -159,62 +159,64 @@ module.exports.handleUplink = async function (utils, dev, body) {
     }
   }
 
-  // ── 4) Aktualizacja w DB (ostatni uplink + zmiany) ────────────────────
-  // Staramy się zapisać leak_last_uplink_ts = tsIso; jeżeli kolumny brak (42703), fallback bez niej.
-  try {
-    if (changed) {
-      try {
+// ── 4) Aktualizacja w DB (ostatni uplink + zmiany) ────────────────────
+// Staramy się zapisać leak_last_uplink_ts = tsIso; jeżeli kolumny brak (42703), fallback bez niej.
+try {
+  if (changed) {
+    try {
+      await db.query(
+        `UPDATE devices
+           SET leak_status          = $1,
+               leak_last_change_ts  = now(),
+               leak_last_uplink_ts  = $2::timestamptz,
+               battery_v            = COALESCE($3, battery_v),
+               battery_pct          = COALESCE($4, battery_pct)
+         WHERE id = $5`,
+        [leak, tsIso, battV, batteryPct, dev.id]
+      );
+    } catch (e) {
+      if (e.code === '42703') {
+        // starsza schema – bez leak_last_uplink_ts / battery_pct
         await db.query(
           `UPDATE devices
-              SET leak_status = $1,
-                  leak_last_change_ts = now(),
-                  leak_last_uplink_ts = $2::timestamptz,
- battery_v   = COALESCE($3, battery_v),
- battery_pct = COALESCE($4, battery_pct)
- WHERE id = $5
- [leak, tsIso, battV, batteryPct, dev.id]
+             SET leak_status         = $1,
+                 leak_last_change_ts = now(),
+                 battery_v           = COALESCE($2, battery_v)
+           WHERE id = $3`,
+          [leak, battV, dev.id]
         );
-      } catch (e) {
-        if (e.code === '42703') {
-          await db.query(
-            `UPDATE devices
-                SET leak_status = $1,
-                    leak_last_change_ts = now(),
-                    battery_v = COALESCE($2, battery_v)
-              WHERE id = $3`,
-            [leak, battV, dev.id]
-          );
-        } else {
-          throw e;
-        }
-      }
-    } else {
-      try {
-        await db.query(
-          `UPDATE devices
-              SET leak_last_uplink_ts = $1::timestamptz,
- battery_v   = COALESCE($2, battery_v),
- battery_pct = COALESCE($3, battery_pct)
- WHERE id = $4
- [tsIso, battV, batteryPct, dev.id]
-
-        );
-      } catch (e) {
-        if (e.code === '42703') {
-          await db.query(
-            `UPDATE devices
-                SET battery_v = COALESCE($1, battery_v)
-              WHERE id = $2`,
-            [battV, dev.id]
-          );
-        } else {
-          throw e;
-        }
+      } else {
+        throw e;
       }
     }
-  } catch (e) {
-    console.error('[LEAK] DB update error:', e);
+  } else {
+    try {
+      await db.query(
+        `UPDATE devices
+           SET leak_last_uplink_ts = $1::timestamptz,
+               battery_v           = COALESCE($2, battery_v),
+               battery_pct         = COALESCE($3, battery_pct)
+         WHERE id = $4`,
+        [tsIso, battV, batteryPct, dev.id]
+      );
+    } catch (e) {
+      if (e.code === '42703') {
+        // starsza schema – bez leak_last_uplink_ts / battery_pct
+        await db.query(
+          `UPDATE devices
+             SET battery_v = COALESCE($1, battery_v)
+           WHERE id = $2`,
+          [battV, dev.id]
+        );
+      } else {
+        throw e;
+      }
+    }
   }
+} catch (e) {
+  console.error('[LEAK] DB update error:', e);
+}
+
 
   // ── 5) SSE do frontu ──────────────────────────────────────────────────
   sendEvent({

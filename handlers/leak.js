@@ -61,10 +61,18 @@ module.exports.handleUplink = async function (utils, dev, body) {
 
   // ── 2) Bateria ───────────────────────────────────────────────────────
   // ChirpStack payload: { battery: 0..100 } oraz ewentualnie { voltage: "3.52" }
-  const batteryPct = (obj.battery != null) ? Math.max(0, Math.min(100, Number(obj.battery))) : null;
-  const battV = (obj.voltage != null) ? Number(obj.voltage) : null;
+  // battery: % (0–100) lub rzadziej 0–1 → przeskalujmy; zaokrąglamy do int
+  let batteryPct = null;
+  if (obj.battery != null) {
+    const n = Number(obj.battery);
+    if (!Number.isNaN(n)) {
+      batteryPct = n <= 1 ? Math.round(n * 100) : Math.round(Math.max(0, Math.min(100, n)));
+    }
+  }
+  const battV = (obj.voltage != null && !Number.isNaN(Number(obj.voltage))) ? Number(obj.voltage) : null;
 
-  const prev = dev.leak_status === true;
+  // leak_status z DB bywa boolean albo 't'/'f' → znormalizuj
+  const prev = (dev.leak_status === true || dev.leak_status === 't' || dev.leak_status === 'true');
   const changed = leak !== prev;
 
   console.log(`[LEAK] RX ${serial} obj=${JSON.stringify(obj)}`);
@@ -91,20 +99,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
       // b) Preferuj odrębne numery dla leak: leak_phone1/leak_phone2
       let targets = [dev.leak_phone1, dev.leak_phone2].map(normalisePhone).filter(Boolean);
 
-      // fallback: jeśli brak, bierz pierwszy numer z urządzenia typu 'septic'
-      if (targets.length === 0) {
-        const { rows: ph } = await db.query(
-          `SELECT phone
-             FROM devices
-            WHERE user_id = $1
-              AND device_type = 'septic'
-              AND phone IS NOT NULL AND LENGTH(TRIM(phone)) > 0
-            ORDER BY created_at ASC
-            LIMIT 1`,
-          [dev.user_id]
-        );
-        if (ph.length) targets.push(normalisePhone(ph[0].phone));
-      }
+
 
       if (targets.length === 0) {
         console.log(`[LEAK] SKIP – brak numerów docelowych (leak_phone1/2 ani septic) u user_id=${dev.user_id}`);

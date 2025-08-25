@@ -169,9 +169,10 @@ module.exports.handleUplink = async function (utils, dev, body) {
               SET leak_status = $1,
                   leak_last_change_ts = now(),
                   leak_last_uplink_ts = $2::timestamptz,
-                  battery_v = COALESCE($3, battery_v)
-            WHERE id = $4`,
-          [leak, tsIso, battV, dev.id]
+ battery_v   = COALESCE($3, battery_v),
+ battery_pct = COALESCE($4, battery_pct)
+ WHERE id = $5
+ [leak, tsIso, battV, batteryPct, dev.id]
         );
       } catch (e) {
         if (e.code === '42703') {
@@ -192,9 +193,11 @@ module.exports.handleUplink = async function (utils, dev, body) {
         await db.query(
           `UPDATE devices
               SET leak_last_uplink_ts = $1::timestamptz,
-                  battery_v = COALESCE($2, battery_v)
-            WHERE id = $3`,
-          [tsIso, battV, dev.id]
+ battery_v   = COALESCE($2, battery_v),
+ battery_pct = COALESCE($3, battery_pct)
+ WHERE id = $4
+ [tsIso, battV, batteryPct, dev.id]
+
         );
       } catch (e) {
         if (e.code === '42703') {
@@ -218,7 +221,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
     serial,
     leak,
     battery_v: battV,
-    battery_pct: batteryPct,   // % baterii z payloadu (jeśli był)
+    battery: batteryPct,  // % baterii z payloadu (jeśli był)
     ts: tsIso                  // „ostatni uplink” dla UI
   });
 };

@@ -1268,7 +1268,17 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
 // ─────────────────────────────────────────────────────────────────────────────
 app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => {
   const { rows } = await db.query('SELECT * FROM devices WHERE user_id=$1', [req.user.id]);
-  res.json(rows);
+  const iso = v => (v ? new Date(v).toISOString() : null);
+  const mapped = rows.map(d => ({
+    ...d,
+    leak_last_change_ts: iso(d.leak_last_change_ts),
+    leak_last_uplink_ts: iso(d.leak_last_uplink_ts),
+    co_last_change_ts:   iso(d.co_last_change_ts),
+    co_last_uplink_ts:   iso(d.co_last_uplink_ts),
+    empty_ts:            iso(d.empty_ts),
+    created_at:          iso(d.created_at),
+  }));
+  res.json(mapped);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -78,11 +78,14 @@ module.exports.handleUplink = async function (utils, dev, body) {
   console.log(`[LEAK] RX ${serial} obj=${JSON.stringify(obj)}`);
   console.log(`[LEAK] PARSED serial=${serial} leak=${leak} (src=${src}, val=${raw}) battV=${battV ?? 'n/a'} battery%=${batteryPct ?? 'n/a'} prev=${prev}`);
 
-  // ── 3) Alert: tylko na przejściu normal → leak ───────────────────────
-  if (changed && leak === true) {
+  // ── 3) Alert: tylko na przejściu normal → leak (bez wczesnych returnów) ──
+  let doAlert = changed && leak === true;
+  let targets = [];
+  if (doAlert) {
     try {
       // a) globalny status abonamentu/limit
       const { rows: [u] } = await db.query(
+
         `SELECT sms_limit,
                 abonament_expiry,
                 (abonament_expiry IS NOT NULL AND abonament_expiry < CURRENT_DATE) AS expired
@@ -90,27 +93,29 @@ module.exports.handleUplink = async function (utils, dev, body) {
           WHERE id = $1`,
         [dev.user_id]
       );
-      if (!u) { console.log('[LEAK] SKIP – user not found for device', dev.id); return; }
-      if (u.expired === true || u.expired === 't') {
-        console.log(`[LEAK] SKIP – abonament expired for user=${dev.user_id} (expiry=${u.abonament_expiry || 'NULL'})`);
-        return;
+      if (!u) {
+        console.log('[LEAK] SKIP alert – user not found for device', dev.id);
+        doAlert = false;
+      } else if (u.expired === true || u.expired === 't') {
+        console.log(`[LEAK] SKIP alert – abonament expired for user=${dev.user_id} (expiry=${u.abonament_expiry || 'NULL'})`);
+        doAlert = false;
       }
 
       // b) Preferuj odrębne numery dla leak: leak_phone1/leak_phone2
-      let targets = [dev.leak_phone1, dev.leak_phone2].map(normalisePhone).filter(Boolean);
-
-
-
+     
+      targets = [dev.leak_phone1, dev.leak_phone2].map(normalisePhone).filter(Boolean);
       if (targets.length === 0) {
-        console.log(`[LEAK] SKIP – brak numerów docelowych (leak_phone1/2 ani septic) u user_id=${dev.user_id}`);
-        return;
+        console.log(`[LEAK] SKIP alert – brak numerów leak_phone1/2 u user_id=${dev.user_id}`);
+        doAlert = false;
       }
 
-      const devName = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
+
+
+            const devName = (dev.name && String(dev.name).trim().length) ? String(dev.name).trim() : serial;
       const smsMsg  = `Wykryto zalanie – ${devName}. Sprawdź natychmiast!`;
 
       // d) SMS (z globalnej puli) + CALL na każdy numer
-      for (const to of targets) {
+      if (doAlert) for (const to of targets) {
         const ok = await sendSmsWithQuota(db, dev.user_id, to, smsMsg, 'leak');
         if (!ok) {
           console.log(`[LEAK] SKIP SMS → brak SMS w globalnej puli (user=${dev.user_id})`);

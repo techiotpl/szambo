@@ -103,7 +103,12 @@ module.exports = function registerAdsRoute(app) {
   const DISABLED_CITIES  = new Set();
   const DISABLED_REGIONS = new Set();
 
-  app.get('/ads', (req, res) => {
+  // app.get('/ads', (req, res) => { ----- bylo 
+///jest
+    const cors = require('cors');
+  app.options('/ads', cors()); // preflight (na zapas)
+  app.get('/ads', cors({ origin: true }), (req, res) => {
+    //koniec jest
     if (process.env.ADS_ENABLED !== 'true') {
       return res.json([]);
     }

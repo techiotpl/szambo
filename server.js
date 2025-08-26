@@ -338,7 +338,7 @@ ALTER TABLE users
 
 -- Jednorazowe wypełnienie z devices (max z urządzeń, żeby nic nie „uciąć”):
 UPDATE users u
-SET sms_limit = x.sms_limit,
+SET sms_limit        = COALESCE(u.sms_limit, x.sms_limit),
     abonament_expiry = COALESCE(u.abonament_expiry, x.abonament_expiry)
 FROM (
   SELECT user_id,
@@ -347,7 +347,8 @@ FROM (
   FROM devices
   GROUP BY user_id
 ) x
-WHERE u.id = x.user_id;
+WHERE u.id = x.user_id
+  AND (u.sms_limit IS NULL OR u.abonament_expiry IS NULL);
 
 
 `; 

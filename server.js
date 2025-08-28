@@ -1530,39 +1530,137 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
         const htmlContent = `
 <!DOCTYPE html>
 <html lang="pl">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Twoje konto TechioT</title></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
-  <table role="presentation" style="width:100%;border-collapse:collapse;">
-    <tr><td align="center" style="padding:20px 0;">
-      <table role="presentation" style="width:600px;border-collapse:collapse;background:#ffffff;box-shadow:0 0 10px rgba(0,0,0,0.1);">
-        <tr><td align="center" style="padding:20px;">
-          <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg" alt="TechioT Logo" style="max-width:150px;height:auto;">
-        </td></tr>
-        <tr><td style="padding:0 20px;border-bottom:1px solid #eee;">
-          <h2 style="color:#333;font-size:24px;margin:0;">Witamy w TechioT</h2>
-        </td></tr>
-        <tr><td style="padding:20px;">
-          <p style="color:#555;font-size:16px;line-height:1.5;">Twoje konto zostało pomyślnie utworzone, a urządzenie dodane do systemu.</p>
-          <table role="presentation" style="width:100%;margin:20px 0;border-collapse:collapse;">
-            <tr><td style="padding:10px;background:#f0f0f0;border-radius:5px;">
-              <strong>Login:</strong> ${em}<br>
-              <strong>Hasło:</strong> ${basePwd}
-            </td></tr>
-          </table>
-          <p style="color:#555;font-size:16px;line-height:1.5;">
-            <strong>Pobierz lub otwórz aplikację TechioT:</strong><br>
-            <a href="intent://openApp#Intent;scheme=techiot;package=pl.techiot.szambocontrol;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dpl.techiot.szambocontrol;end"
-               style="color:#1a73e8;text-decoration:none;font-size:16px;">Uruchom aplikację Szambo Control</a>
-          </p>
-          <p style="color:#999;font-size:12px;line-height:1.4;margin-top:30px;">Ten e-mail został wygenerowany automatycznie, prosimy na niego nie odpowiadać.</p>
-        </td></tr>
-        <tr><td align="center" style="padding:10px 20px;background:#fafafa;">
-          <p style="color:#777;font-size:14px;margin:0;">Zespół <strong>TechioT</strong></p>
-        </td></tr>
-      </table>
-    </td></tr>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Twoje konto TechioT</title>
+  <!-- Preheader (ukryty podgląd w skrzynce) -->
+  <style>
+    .preheader { display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; overflow:hidden; mso-hide:all; }
+    @media screen and (max-width: 620px) {
+      .container { width:100% !important; }
+      .p-20 { padding:16px !important; }
+      .btn { width:100% !important; display:block !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background:#f4f4f4; font-family:Arial,Helvetica,sans-serif;">
+  <div class="preheader">
+    Konto utworzone – pobierz aplikację TechioT lub otwórz wersję na iPhone/iPad.
+  </div>
+
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="container" style="width:600px; max-width:600px; background:#ffffff; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,0.06);">
+          <!-- Logo -->
+          <tr>
+            <td align="center" style="padding:24px;">
+              <img src="https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg" width="150" height="auto" alt="TechioT" style="display:block; border:0; outline:none; text-decoration:none; max-width:150px;">
+            </td>
+          </tr>
+
+          <!-- Nagłówek -->
+          <tr>
+            <td style="padding:0 24px 16px 24px; border-bottom:1px solid #eeeeee;">
+              <h1 style="margin:0; font-size:22px; line-height:1.3; color:#222;">Witamy w TechioT</h1>
+            </td>
+          </tr>
+
+          <!-- Treść -->
+          <tr>
+            <td class="p-20" style="padding:24px;">
+              <p style="margin:0 0 12px 0; font-size:16px; color:#444; line-height:1.6;">
+                Twoje konto zostało pomyślnie utworzone, a urządzenie dodane do systemu.
+              </p>
+
+              <!-- Box z danymi logowania -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:16px 0 8px 0; border-collapse:separate; border-spacing:0; background:#f7f7f8; border:1px solid #eee; border-radius:6px;">
+                <tr>
+                  <td style="padding:12px 14px; font-size:15px; color:#333;">
+                    <strong>Login:</strong> ${em}<br>
+                    <strong>Hasło:</strong> ${basePwd}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Android: Google Play -->
+              <p style="margin:20px 0 10px 0; font-size:16px; color:#222; font-weight:bold;">
+                Pobierz aplikację na Androida:
+              </p>
+
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol&utm_source=welcome_email&utm_medium=email&utm_campaign=onboarding"
+                style="height:48px;v-text-anchor:middle;width:320px;" arcsize="8%" stroke="f" fillcolor="#1a73e8">
+                <w:anchorlock/>
+                <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;">
+                  Pobierz z Google Play
+                </center>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-- -->
+              <a class="btn"
+                 href="https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol&utm_source=welcome_email&utm_medium=email&utm_campaign=onboarding"
+                 style="background:#1a73e8;color:#ffffff;display:inline-block;padding:14px 22px;border-radius:6px;text-decoration:none;font-size:16px; line-height:1;">
+                 Pobierz z Google Play
+              </a>
+              <!--<![endif]-->
+
+              <!-- iPhone/iPad: wersja webowa -->
+              <p style="margin:26px 0 10px 0; font-size:16px; color:#222; font-weight:bold;">
+                iPhone / iPad:
+              </p>
+
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://apple-szambo-control.techiot.pl/?utm_source=welcome_email&utm_medium=email&utm_campaign=onboarding"
+                style="height:48px;v-text-anchor:middle;width:360px;" arcsize="8%" stroke="f" fillcolor="#111111">
+                <w:anchorlock/>
+                <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;">
+                  Jeśli używasz Apple () – kliknij tu
+                </center>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-- -->
+              <a class="btn"
+                 href="https://apple-szambo-control.techiot.pl/?utm_source=welcome_email&utm_medium=email&utm_campaign=onboarding"
+                 style="background:#111111;color:#ffffff;display:inline-block;padding:14px 22px;border-radius:6px;text-decoration:none;font-size:16px; line-height:1;">
+                 Jeśli używasz Apple () – kliknij tu
+              </a>
+              <!--<![endif]-->
+
+              <!-- Linki tekstowe (fallback) -->
+              <p style="margin:14px 0 0 0; font-size:13px; color:#777; line-height:1.6;">
+                Jeśli przyciski nie działają, skopiuj i wklej w przeglądarce:
+                <br>
+                Android: <span style="word-break:break-all;">https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol</span>
+                <br>
+                iPhone/iPad: <span style="word-break:break-all;">https://apple-szambo-control.techiot.pl/</span>
+              </p>
+
+              <!-- Notka automatyczna -->
+              <p style="margin:28px 0 0 0; color:#9a9a9a; font-size:12px; line-height:1.5;">
+                Ten e-mail został wygenerowany automatycznie. Prosimy na niego nie odpowiadać.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Stopka -->
+          <tr>
+            <td align="center" style="padding:16px 24px; background:#fafafa; border-top:1px solid #eeeeee;">
+              <p style="margin:0; font-size:14px; color:#666;">
+                Zespół <strong>TechioT</strong>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
   </table>
-</body></html>`;
+</body>
+</html>
+`;
         console.log(`✉️  [/admin/create-device-with-user] welcome mail → ${em}`);
         await sendEmail(em, '✅ Konto TechioT', htmlContent);
 

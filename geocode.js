@@ -2,7 +2,7 @@
 const axios = require('axios');
 
 const OPENCAGE_KEY = (process.env.OPENCAGE_KEY || '').trim();
-const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'contact@techiot.pl').trim();
+const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 
 async function geocodeWithOpenCage(q) {
   if (!OPENCAGE_KEY) return null;

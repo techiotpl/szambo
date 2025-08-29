@@ -1406,6 +1406,10 @@ app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
 //  • sprawdzamy duplikat seriala i wynik chirpUpdate()
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => {
+  // ZMIANA: deklaracje na górze funkcji
+  let userId = null;
+  let userCreated = false;
+  let basePwd = null;
   try {
     const {
       serie_number,                     // ⬅︎ zachowujemy tę nazwę z formularza
@@ -1468,7 +1472,7 @@ const originalStreet = (street ?? '').toString().trim();
         [em]
       );
 
-      let userId, userCreated = false, basePwd = null;
+     
 
       if (u1.rowCount > 0) {
         // użytkownik istnieje → nie wysyłamy maila/SMS

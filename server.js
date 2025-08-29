@@ -14,6 +14,7 @@ const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
+const { geocodeAddress } = require('./geocode'); 
 
 const handlers = {
   septic: require('./handlers/septic'),
@@ -1419,7 +1420,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
       company = '',
       device_type                       // 'septic' | 'leak'
     } = req.body || {};
-
+const originalStreet = (street ?? '').toString().trim();
     // ── walidacja wejścia ─────────────────────────────────────────
     const em = String(email || '').trim().toLowerCase();
     const serial = String(serie_number || '').replace(/\s+/g,'').trim().toUpperCase();
@@ -1444,6 +1445,22 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
     const client = await db.connect();
     try {
       await client.query('BEGIN');
+
+		  // 📍 Jednorazowe geokodowanie profilu — tylko dla NOWEGO usera z adresem
+  if (userCreated && originalStreet && originalStreet.length >= 3) {
+    try {
+      await db.query('UPDATE users SET street = $1 WHERE id = $2', [originalStreet, userId]);
+      const geo = await geocodeAddress(originalStreet);
+      if (geo) {
+        await db.query('UPDATE users SET lat = $1, lon = $2 WHERE id = $3', [geo.lat, geo.lon, userId]);
+        console.log(`📍 geocode OK user=${em} lat=${geo.lat} lon=${geo.lon}`);
+      } else {
+        console.log(`📍 geocode MISS user=${em} addr="${originalStreet}"`);
+      }
+    } catch (e) {
+      console.warn('⚠️ geocode/store failed:', e.message);
+    }
+  }
 
       // 1) sprawdź, czy user istnieje
       const u1 = await client.query(

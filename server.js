@@ -86,6 +86,59 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
 app.use(cors());
 app.use(bodyParser.json());
 
+
+ const axios      = require('axios');
+ ...
+// Nominatim – kontakt do nagłówka i parametru email (wymagane przez OSM)
+const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
+
+async function geocodeAddressPL(street) {
+  if (!street || street.trim().length < 4) return null;
+  const url = 'https://nominatim.openstreetmap.org/search';
+  const params = {
+    q: `${street}, Polska`,
+    format: 'jsonv2',
+    limit: 1,
+    countrycodes: 'pl',
+    addressdetails: 0,
+    email: NOMINATIM_CONTACT
+  };
+  const r = await axios.get(url, {
+    params,
+    headers: { 'User-Agent': `TechioT/1.0 (${NOMINATIM_CONTACT})` },
+    timeout: 8000
+  });
+  const hit = Array.isArray(r.data) && r.data[0];
+  if (!hit || !hit.lat || !hit.lon) return null;
+  return { lat: parseFloat(hit.lat), lon: parseFloat(hit.lon) };
+}
+
+async function geocodeAndUpdateDeviceBySerial(serial) {
+  try {
+    const { rows } = await db.query(
+      `SELECT street, lat, lon FROM devices WHERE serial_number=$1 LIMIT 1`,
+      [serial]
+    );
+    if (!rows.length) return;
+    const { street, lat, lon } = rows[0];
+    if (!street) return;                  // brak adresu – nic nie rób
+    if (lat != null && lon != null) return; // już ustawione – nic nie rób
+    const coords = await geocodeAddressPL(String(street));
+    if (!coords) return;
+    await db.query(
+      `UPDATE devices SET lat=$1, lon=$2 WHERE serial_number=$3`,
+      [coords.lat, coords.lon, serial]
+    );
+    console.log(`📍 geocoded ${serial} → ${coords.lat},${coords.lon}`);
+  } catch (e) {
+    console.warn('⚠️ geocode failed for', serial, e.message);
+  }
+}
+
+
+
+
+
 // ─────────────────────────────────────────────────────────────
 //         adminowe  do nowej apki   gdzie dodajemy czujnik i tyle
 //  POST /admin/login   { password }
@@ -1339,6 +1392,7 @@ app.post('/me/devices/claim', auth, consentGuard, async (req, res) => {
     );
 
     console.log(`✅ [/me/devices/claim] user=${req.user.email} dodał ${serialNorm} (type=${type})`);
+    geocodeAndUpdateDeviceBySerial(serialNorm).catch(()=>{});
     return res.status(200).json({ ok: true });
   } catch (e) {
     console.error('❌ Error in /me/devices/claim:', e);
@@ -1544,6 +1598,8 @@ const originalStreet = (street ?? '').toString().trim();
       }
 
       await client.query('COMMIT');
+		      // geokoduj urządzenie w tle (jeśli ma adres)
+      geocodeAndUpdateDeviceBySerial(serial).catch(()=>{});
 
       // 5) komunikacja zewnętrzna TYLKO gdy user NOWY
       if (userCreated) {

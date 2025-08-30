@@ -669,7 +669,7 @@ function adminOnly(req, res, next) {
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
     SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
-           u.customer_type,
+           u.customer_type AS customer_type,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json
@@ -843,16 +843,16 @@ app.get('/admin/firm/tree', auth, adminOnly, async (req, res) => {
     const { rows: firms } = await db.query(
       `SELECT id, email, name, company
          FROM users
-        WHERE role = 'firmowy'`
+        WHERE customer_type = 'firmowy'`
     );
     const out = [];
     for (const f of firms) {
       // klienci tej firmy
       const { rows: clients } = await db.query(
         `SELECT c.id, c.email, c.name
-           FROM firm_clients fc
-           JOIN users c ON c.id = fc.client_user_id
-          WHERE fc.firm_user_id = $1`,
+        FROM company_clients cc
+        JOIN users c ON c.id = cc.client_id
+       WHERE cc.company_id = $1`,
         [f.id]
       );
       const clientsOut = [];

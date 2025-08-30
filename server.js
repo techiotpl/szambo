@@ -358,6 +358,20 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_v         NUMERIC(5,2);
 -- 2) users – pola używane w kodzie
 ALTER TABLE users   ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
 
+-- typ klienta (client/firmowy) + ograniczenie wartości
+ALTER TABLE users ADD COLUMN IF NOT EXISTS customer_type TEXT DEFAULT 'client';
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name='users' AND constraint_name='chk_users_customer_type'
+  ) THEN
+    ALTER TABLE users ADD CONSTRAINT chk_users_customer_type
+      CHECK (customer_type IN ('client','firmowy'));
+  END IF;
+END$$;
+UPDATE users SET customer_type='client' WHERE customer_type IS NULL;
+
 -- 3) measurements – jeśli brak
 CREATE TABLE IF NOT EXISTS measurements (
   device_serial TEXT NOT NULL,
@@ -365,6 +379,27 @@ CREATE TABLE IF NOT EXISTS measurements (
   ts            TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (device_serial, ts)
 );
+
+-- współrzędne urządzeń (jeśli jeszcze nie ma)
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6);
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS lon NUMERIC(9,6);
+
+-- powiązania firma → klienci (użytkownicy)
+CREATE TABLE IF NOT EXISTS company_clients (
+  company_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  client_id  UUID REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (company_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_company_clients_company ON company_clients(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_clients_client  ON company_clients(client_id);
+
+
+
+
+
+
+
 
 -- 4) user_consents – wymagane przez consentGuard
 CREATE TABLE IF NOT EXISTS user_consents (
@@ -623,7 +658,7 @@ function adminOnly(req, res, next) {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
-    SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
+    SELECT u.id, u.email, u.name, u.customer_type, u.sms_limit, u.abonament_expiry,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json
@@ -828,7 +863,7 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     'phone','phone2','tel_do_szambiarza','street',
     'red_cm','serial_number','serie_number','capacity',
     'alert_email','trigger_dist','sms_after_empty','device_type',
-    'co_phone1','co_phone2','leak_phone1','leak_phone2','co_threshold_ppm'
+    'co_phone1','co_phone2','leak_phone1','leak_phone2','co_threshold_ppm','lat','lon'
   ]);
   const allowedUser = new Set(['u.sms_limit','u.abonament_expiry']);
 
@@ -934,7 +969,20 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
       pushDev(k, num);
       continue;
     }
+    if (k === 'lat' || k === 'lon') {
+      if (v == null || String(v).trim() === '') { pushDev(k, null); continue; }
+      const num = Number(v);
+      if (!Number.isFinite(num)) return res.status(400).send(`${k} must be number`);
+      if (k === 'lat' && (num < -90 || num > 90))   return res.status(400).send('lat out of range');
+      if (k === 'lon' && (num < -180 || num > 180)) return res.status(400).send('lon out of range');
+      pushDev(k, num);
+      continue;
+    }
 
+
+
+
+	  
     if (k === 'street' || k === 'device_type') {
       const s = String(v ?? '').trim();
       pushDev(k, s || null);
@@ -1280,6 +1328,68 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
   console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
   res.send('User created');
 });
+
+// PATCH /admin/user/:email/params — admin zmienia parametry użytkownika
+// dozwolone: name, company, street, phone, is_active, customer_type
+app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
+  const email = String(req.params.email || '').toLowerCase().trim();
+  if (!email || !email.includes('@')) return res.status(400).send('invalid email param');
+
+  const allowed = new Set(['name','company','street','phone','is_active','customer_type']);
+  const cols = [];
+  const vals = [];
+  let i = 1;
+
+  for (const [k, raw] of Object.entries(req.body || {})) {
+    if (!allowed.has(k)) return res.status(400).send(`field ${k} not allowed`);
+
+    if (k === 'is_active') {
+      if (typeof raw !== 'boolean') return res.status(400).send('is_active must be boolean');
+      cols.push(`is_active = $${i++}`); vals.push(raw);
+      continue;
+    }
+    if (k === 'customer_type') {
+      const v = String(raw || '').trim().toLowerCase();
+      if (!['client','firmowy'].includes(v)) return res.status(400).send('customer_type must be client|firmowy');
+      cols.push(`customer_type = $${i++}`); vals.push(v);
+      continue;
+    }
+    if (k === 'phone') {
+      if (raw == null || String(raw).trim() === '') {
+        cols.push(`phone = $${i++}`); vals.push(null); continue;
+      }
+      if (typeof raw !== 'string') return res.status(400).send('invalid phone');
+      const nv = normalisePhone(raw.replace(/\s+/g,''));
+      if (!nv) return res.status(400).send('invalid phone');
+      cols.push(`phone = $${i++}`); vals.push(nv);
+      continue;
+    }
+    // name/company/street → string lub null
+    if (raw == null || String(raw).trim() === '') {
+      cols.push(`${k} = $${i++}`); vals.push(null);
+    } else {
+      cols.push(`${k} = $${i++}`); vals.push(String(raw).trim());
+    }
+  }
+
+  if (!cols.length) return res.status(400).send('nothing to update');
+  vals.push(email);
+
+  try {
+    const q = `UPDATE users SET ${cols.join(', ')} WHERE LOWER(email)=LOWER($${i++}) RETURNING id`;
+    const r = await db.query(q, vals);
+    if (!r.rowCount) return res.status(404).send('user not found');
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('❌ [PATCH /admin/user/:email/params]', e);
+    return res.status(500).send('server error');
+  }
+});
+
+
+
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  USER PROFILE  (wykorzystywane przez UserDataScreen)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1351,6 +1461,39 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
   }));
   res.json(mapped);
 });
+
+// GET /firm/clients — lista klientów i ich urządzeń dla zalogowanego "firmowy"
+app.get('/firm/clients', auth, consentGuard, async (req, res) => {
+  try {
+    const { rows: who } = await db.query('SELECT customer_type FROM users WHERE id=$1', [req.user.id]);
+    if (!who.length || (who[0].customer_type || 'client') !== 'firmowy') {
+      return res.status(403).send('FORBIDDEN_NOT_FIRM');
+    }
+    const q = `
+      SELECT
+        c.id          AS client_id,
+        c.email       AS client_email,
+        c.name        AS client_name,
+        c.street      AS client_street,
+        d.serial_number,
+        d.name        AS device_name,
+        d.street      AS device_street,
+        d.lat, d.lon,
+        (d.params->>'distance')::int AS distance
+      FROM company_clients cc
+      JOIN users   c ON c.id = cc.client_id
+      LEFT JOIN devices d ON d.user_id = c.id
+      WHERE cc.company_id = $1
+      ORDER BY c.email, d.serial_number`;
+    const { rows } = await db.query(q, [req.user.id]);
+    return res.json(rows);
+  } catch (e) {
+    console.error('❌ GET /firm/clients', e);
+    return res.status(500).send('server error');
+  }
+});
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /me/devices/claim — użytkownik dopina istniejące urządzenie do konta
@@ -1467,7 +1610,45 @@ app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
   }
 });
 
+// POST /admin/firm/:firm_email/clients  { client_email }
+// Dodaje klienta do firmy (obie strony istnieją jako users)
+app.post('/admin/firm/:firm_email/clients', auth, adminOnly, async (req, res) => {
+  const firmEmail   = String(req.params.firm_email || '').toLowerCase().trim();
+  const clientEmail = String(req.body?.client_email || '').toLowerCase().trim();
+  if (!firmEmail || !clientEmail) return res.status(400).send('firm_email & client_email required');
+  try {
+    const { rows: f } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [firmEmail]);
+    const { rows: c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
+    if (!f.length || !c.length) return res.status(404).send('firm or client not found');
+    await db.query(
+      `INSERT INTO company_clients(company_id, client_id) VALUES($1,$2)
+       ON CONFLICT DO NOTHING`,
+      [f[0].id, c[0].id]
+    );
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('❌ /admin/firm/:firm_email/clients', e);
+    return res.status(500).send('server error');
+  }
+});
 
+// DELETE /admin/firm/:firm_email/clients/:client_email — usuwa powiązanie
+app.delete('/admin/firm/:firm_email/clients/:client_email', auth, adminOnly, async (req, res) => {
+  const firmEmail   = String(req.params.firm_email || '').toLowerCase().trim();
+  const clientEmail = String(req.params.client_email || '').toLowerCase().trim();
+  if (!firmEmail || !clientEmail) return res.status(400).send('firm_email & client_email required');
+  try {
+    const { rows: f } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [firmEmail]);
+    const { rows: c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
+    if (!f.length || !c.length) return res.status(404).send('firm or client not found');
+    const r = await db.query('DELETE FROM company_clients WHERE company_id=$1 AND client_id=$2', [f[0].id, c[0].id]);
+    if (!r.rowCount) return res.status(404).send('link not found');
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('❌ DELETE /admin/firm/.../clients/...', e);
+    return res.status(500).send('server error');
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-device-with-user — tworzenie (lub dopięcie) urządzenia

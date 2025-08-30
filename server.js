@@ -87,8 +87,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 
- const axios      = require('axios');
- ...
+
 // Nominatim – kontakt do nagłówka i parametru email (wymagane przez OSM)
 const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 

@@ -850,9 +850,9 @@ app.get('/admin/firm/tree', auth, adminOnly, async (req, res) => {
       // klienci tej firmy
       const { rows: clients } = await db.query(
         `SELECT c.id, c.email, c.name
-        FROM company_clients cc
-        JOIN users c ON c.id = cc.client_id
-       WHERE cc.company_id = $1`,
+           FROM firm_clients fc
+           JOIN users c ON c.id = fc.client_user_id
+          WHERE fc.firm_user_id = $1`,
         [f.id]
       );
       const clientsOut = [];
@@ -1682,6 +1682,7 @@ app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
 app.post('/admin/firm/:firm_email/clients', auth, adminOnly, async (req, res) => {
   const firmEmail   = String(req.params.firm_email || '').toLowerCase().trim();
   const clientEmail = String(req.body?.client_email || '').toLowerCase().trim();
+	console.log(`[ADMIN attach] firm=${firmEmail} client=${clientEmail}`);
   if (!firmEmail || !clientEmail) return res.status(400).send('firm_email & client_email required');
   try {
     const { rows: f } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [firmEmail]);

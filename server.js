@@ -455,6 +455,16 @@ FROM (
 WHERE u.id = x.user_id
   AND (u.sms_limit IS NULL OR u.abonament_expiry IS NULL);
 
+-- ───────── Relacja firmy ↔ klienci ─────────
+CREATE TABLE IF NOT EXISTS firm_clients (
+  firm_user_id   UUID REFERENCES users(id)   ON DELETE CASCADE,
+  client_user_id UUID REFERENCES users(id)   ON DELETE CASCADE,
+  PRIMARY KEY (firm_user_id, client_user_id)
+);
+
+-- Współrzędne na devices (jeśli jeszcze nie ma)
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6);
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS lon NUMERIC(9,6);
 
 `; 
 
@@ -658,7 +668,8 @@ function adminOnly(req, res, next) {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
-    SELECT u.id, u.email, u.name, u.customer_type, u.sms_limit, u.abonament_expiry,
+    SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
+           u.role AS customer_type,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json
@@ -825,6 +836,61 @@ app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => 
   const { rows } = await db.query(q, [serial]);
   res.json(rows);
 });
+
+// GET /admin/firm/tree — drzewko: firmy → klienci → urządzenia
+app.get('/admin/firm/tree', auth, adminOnly, async (req, res) => {
+  try {
+    const { rows: firms } = await db.query(
+      `SELECT id, email, name, company
+         FROM users
+        WHERE role = 'firmowy'`
+    );
+    const out = [];
+    for (const f of firms) {
+      // klienci tej firmy
+      const { rows: clients } = await db.query(
+        `SELECT c.id, c.email, c.name
+           FROM firm_clients fc
+           JOIN users c ON c.id = fc.client_user_id
+          WHERE fc.firm_user_id = $1`,
+        [f.id]
+      );
+      const clientsOut = [];
+      for (const c of clients) {
+        // urządzenia klienta (distance z kolumny albo z params)
+        const { rows: devs } = await db.query(
+          `SELECT serial_number, name, street, lat, lon,
+                  COALESCE(distance_cm, NULLIF((params->>'distance')::int, 0)) AS distance_cm
+             FROM devices
+            WHERE user_id = $1`,
+          [c.id]
+        );
+        clientsOut.push({
+          email: c.email,
+          name:  c.name,
+          devices: devs.map(d => ({
+            serial_number: d.serial_number,
+            name: d.name,
+            street: d.street,
+            lat: d.lat,
+            lon: d.lon,
+            distance_cm: d.distance_cm
+          }))
+        });
+      }
+      out.push({
+        firm: { email: f.email, name: f.name, company: f.company },
+        clients: clientsOut
+      });
+    }
+    res.json(out);
+  } catch (e) {
+    console.error('GET /admin/firm/tree error:', e);
+    res.status(500).send('server error');
+  }
+});
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /admin/device/:serial/params – zapis parametrów (ADMIN)
@@ -1313,6 +1379,27 @@ app.post('/public/register', async (req, res) => {
   }
 });
 
+// PATCH /admin/user/:email/params — zmiana pól użytkownika (np. typ klienta)
+app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
+  const email = String(req.params.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.status(400).send('invalid email');
+  const { customer_type } = req.body || {};
+
+  if (customer_type != null && !['client','firmowy'].includes(String(customer_type))) {
+    return res.status(400).send('customer_type must be "client" or "firmowy"');
+  }
+  try {
+    const { rowCount } = await db.query(
+      'UPDATE users SET role = COALESCE($1, role) WHERE LOWER(email)=LOWER($2)',
+      [ customer_type || null, email ]
+    );
+    if (!rowCount) return res.status(404).send('user not found');
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('PATCH /admin/user/:email/params error', e);
+    return res.status(500).send('server error');
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)

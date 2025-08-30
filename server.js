@@ -1582,7 +1582,7 @@ const originalStreet = (street ?? '').toString().trim();
           normalisePhone(phone),
           phone2 ? normalisePhone(phone2) : null,
           tel_do_szambiarza ? normalisePhone(tel_do_szambiarza) : '',
-          removePolishLetters(street),
+          originalStreet,
           moment().add(366, 'days').format('YYYY-MM-DD'),
           typeOk
         ]

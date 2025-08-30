@@ -91,26 +91,7 @@ app.use(bodyParser.json());
 // Nominatim – kontakt do nagłówka i parametru email (wymagane przez OSM)
 const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 
-async function geocodeAddressPL(street) {
-  if (!street || street.trim().length < 4) return null;
-  const url = 'https://nominatim.openstreetmap.org/search';
-  const params = {
-    q: `${street}, Polska`,
-    format: 'jsonv2',
-    limit: 1,
-    countrycodes: 'pl',
-    addressdetails: 0,
-    email: NOMINATIM_CONTACT
-  };
-  const r = await axios.get(url, {
-    params,
-    headers: { 'User-Agent': `TechioT/1.0 (${NOMINATIM_CONTACT})` },
-    timeout: 8000
-  });
-  const hit = Array.isArray(r.data) && r.data[0];
-  if (!hit || !hit.lat || !hit.lon) return null;
-  return { lat: parseFloat(hit.lat), lon: parseFloat(hit.lon) };
-}
+
 
 async function geocodeAndUpdateDeviceBySerial(serial) {
   try {
@@ -126,9 +107,36 @@ async function geocodeAndUpdateDeviceBySerial(serial) {
     console.log(`geo: start serial=${serial} street="${street}" lat=${lat} lon=${lon}`);
     if (!street) return { ok: false, reason: 'no_street' };
     if (lat != null && lon != null) return { ok: true, reason: 'already' };
-    const coords = await geocodeAddressPL(String(street));
+
+    // przygotuj warianty: "ulica nr, miasto" i "miasto, ulica nr"
+    const s = String(street).trim().replace(/\s*,\s*/g, ', ');
+    const parts = s.split(',').map(v => v.trim());
+    const hasDigits = str => /\d/.test(str);
+    const variants = new Set();
+    if (parts.length === 2) {
+      const [a, b] = parts;
+      if (!hasDigits(a) && hasDigits(b)) {
+        // wygląda na "Miasto, Ulica nr" → spróbuj "Ulica nr, Miasto"
+        variants.add(`${b}, ${a}, Polska`);
+      }
+      if (hasDigits(a) && !hasDigits(b)) {
+        // "Ulica nr, Miasto" (już ok)
+        variants.add(`${a}, ${b}, Polska`);
+      }
+    }
+    // zawsze spróbuj też literalnie podany ciąg + PL
+    variants.add(`${s}, Polska`);
+    // i wersję z prefiksem "ul."
+    variants.add(`ul. ${s}, Polska`);
+
+    let coords = null;
+    for (const q of variants) {
+      console.log(`geo: try "${q}" via OpenCage→Nominatim`);
+      coords = await geocodeAddress(q); // <— to jest import z ./geocode (OpenCage fallback Nominatim)
+      if (coords) break;
+    }
     if (!coords) {
-      console.warn(`geo: miss serial=${serial} q="${street}, Polska"`);
+      console.warn(`geo: miss serial=${serial} after ${variants.size} variants`);
       return { ok: false, reason: 'geocoder_miss' };
     }
     await db.query(
@@ -1486,7 +1494,7 @@ app.post('/admin/create-device-with-user', auth, adminOnly, async (req, res) => 
       company = '',
       device_type                       // 'septic' | 'leak'
     } = req.body || {};
-const originalStreet = (street ?? '').toString().trim();
+const originalStreet = (street ?? '').toString().trim().replace(/\s*,\s*/g, ', ');
     // ── walidacja wejścia ─────────────────────────────────────────
     const em = String(email || '').trim().toLowerCase();
     const serial = String(serie_number || '').replace(/\s+/g,'').trim().toUpperCase();

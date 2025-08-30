@@ -669,7 +669,7 @@ function adminOnly(req, res, next) {
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
     SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
-           u.role AS customer_type,
+           u.customer_type,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json
@@ -1379,27 +1379,7 @@ app.post('/public/register', async (req, res) => {
   }
 });
 
-// PATCH /admin/user/:email/params — zmiana pól użytkownika (np. typ klienta)
-app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
-  const email = String(req.params.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) return res.status(400).send('invalid email');
-  const { customer_type } = req.body || {};
 
-  if (customer_type != null && !['client','firmowy'].includes(String(customer_type))) {
-    return res.status(400).send('customer_type must be "client" or "firmowy"');
-  }
-  try {
-    const { rowCount } = await db.query(
-      'UPDATE users SET role = COALESCE($1, role) WHERE LOWER(email)=LOWER($2)',
-      [ customer_type || null, email ]
-    );
-    if (!rowCount) return res.status(404).send('user not found');
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error('PATCH /admin/user/:email/params error', e);
-    return res.status(500).send('server error');
-  }
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
@@ -1567,10 +1547,10 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
         d.street      AS device_street,
         d.lat, d.lon,
         (d.params->>'distance')::int AS distance
-      FROM company_clients cc
-      JOIN users   c ON c.id = cc.client_id
-      LEFT JOIN devices d ON d.user_id = c.id
-      WHERE cc.company_id = $1
+  FROM firm_clients fc
+  JOIN users   c ON c.id = fc.client_user_id
+  LEFT JOIN devices d ON d.user_id = c.id
+  WHERE fc.firm_user_id = $1
       ORDER BY c.email, d.serial_number`;
     const { rows } = await db.query(q, [req.user.id]);
     return res.json(rows);
@@ -1708,7 +1688,7 @@ app.post('/admin/firm/:firm_email/clients', auth, adminOnly, async (req, res) =>
     const { rows: c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
     if (!f.length || !c.length) return res.status(404).send('firm or client not found');
     await db.query(
-      `INSERT INTO company_clients(company_id, client_id) VALUES($1,$2)
+     `INSERT INTO firm_clients(firm_user_id, client_user_id) VALUES($1,$2)
        ON CONFLICT DO NOTHING`,
       [f[0].id, c[0].id]
     );
@@ -1728,7 +1708,7 @@ app.delete('/admin/firm/:firm_email/clients/:client_email', auth, adminOnly, asy
     const { rows: f } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [firmEmail]);
     const { rows: c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
     if (!f.length || !c.length) return res.status(404).send('firm or client not found');
-    const r = await db.query('DELETE FROM company_clients WHERE company_id=$1 AND client_id=$2', [f[0].id, c[0].id]);
+    const r = await db.query('DELETE FROM firm_clients WHERE firm_user_id=$1 AND client_user_id=$2', [f[0].id, c[0].id]);
     if (!r.rowCount) return res.status(404).send('link not found');
     return res.sendStatus(200);
   } catch (e) {

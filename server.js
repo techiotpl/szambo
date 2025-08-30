@@ -118,19 +118,28 @@ async function geocodeAndUpdateDeviceBySerial(serial) {
       `SELECT street, lat, lon FROM devices WHERE serial_number=$1 LIMIT 1`,
       [serial]
     );
-    if (!rows.length) return;
+    if (!rows.length) {
+      console.warn(`geo: device not found serial=${serial}`);
+      return { ok: false, reason: 'not_found' };
+    }
     const { street, lat, lon } = rows[0];
-    if (!street) return;                  // brak adresu – nic nie rób
-    if (lat != null && lon != null) return; // już ustawione – nic nie rób
+    console.log(`geo: start serial=${serial} street="${street}" lat=${lat} lon=${lon}`);
+    if (!street) return { ok: false, reason: 'no_street' };
+    if (lat != null && lon != null) return { ok: true, reason: 'already' };
     const coords = await geocodeAddressPL(String(street));
-    if (!coords) return;
+    if (!coords) {
+      console.warn(`geo: miss serial=${serial} q="${street}, Polska"`);
+      return { ok: false, reason: 'geocoder_miss' };
+    }
     await db.query(
       `UPDATE devices SET lat=$1, lon=$2 WHERE serial_number=$3`,
       [coords.lat, coords.lon, serial]
     );
     console.log(`📍 geocoded ${serial} → ${coords.lat},${coords.lon}`);
+    return { ok: true, lat: coords.lat, lon: coords.lon };
   } catch (e) {
     console.warn('⚠️ geocode failed for', serial, e.message);
+	  return { ok: false, error: e.message };
   }
 }
 
@@ -2090,6 +2099,35 @@ app.post('/consent/decline', auth, async (req, res) => {
   await db.query('UPDATE users SET is_active = FALSE WHERE id=$1', [req.user.id]);
   res.sendStatus(200);      // front wyloguje i pokaże info
 });
+
+
+// POST /admin/geocode-device?serial=...
+app.post('/admin/geocode-device', auth, adminOnly, async (req, res) => {
+  const serial = String(req.query.serial || req.body.serial || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{16}$/.test(serial)) return res.status(400).send('serial (16 hex) required');
+  const result = await geocodeAndUpdateDeviceBySerial(serial);
+  return res.json(result);
+});
+
+// POST /admin/geocode-missing — do 50 brakujących na strzał (1 req/s, żeby nie wkurzać OSM)
+app.post('/admin/geocode-missing', auth, adminOnly, async (req, res) => {
+  const { rows } = await db.query(`
+    SELECT serial_number, street
+      FROM devices
+     WHERE (lat IS NULL OR lon IS NULL)
+       AND street IS NOT NULL AND street <> ''
+     LIMIT 50`);
+  const out = [];
+  for (const r of rows) {
+    /* eslint-disable no-await-in-loop */
+    const one = await geocodeAndUpdateDeviceBySerial(r.serial_number);
+    out.push({ serial: r.serial_number, street: r.street, ...one });
+    await new Promise(s => setTimeout(s, 1000)); // 1 r/s
+  }
+  return res.json({ count: out.length, results: out });
+});
+
+
 
 // ──────────────────────────────────────────────────────────
 // GET /admin/confirm-account?token=...  (publiczny link z maila)

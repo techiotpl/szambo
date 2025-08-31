@@ -1538,14 +1538,15 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
     }
     const q = `
       SELECT
-        c.id                    AS client_id,
-        c.email                 AS client_email,
-        c.name                  AS client_name,
-        c.street                AS client_street,
+        c.id          AS client_id,
+        c.email       AS client_email,
+        c.name        AS client_name,
+        c.street      AS client_street,
         d.serial_number,
-        d.name                  AS device_name,
-        d.street                AS device_street,
-        d.lat, d.lon,
+        d.name        AS device_name,
+        d.street      AS device_street,
+        (d.lat)::double precision AS lat,
+        (d.lon)::double precision AS lon,
         COALESCE(d.distance_cm, NULLIF((d.params->>'distance')::int, 0)) AS distance_cm,
         d.red_cm,
         d.trigger_dist,

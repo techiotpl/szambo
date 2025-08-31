@@ -191,11 +191,13 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
            distance_cm         = $2::int,
            last_measurement_ts = now(),
            trigger_measurement = FALSE,
-           trigger_dist        = CASE
-                                   WHEN $2::int <= red_cm THEN TRUE
-                                   WHEN $2::int >= red_cm THEN FALSE
-                                   ELSE trigger_dist
-                                 END
+           -- LATCH: włącza się przy przejściu przez próg, reset TYLKO gdy >110 cm ------------>  110  musi przekroczyc zeby sie zresetowało 
+           trigger_dist = CASE
+                            WHEN trigger_dist = TRUE
+                              THEN CASE WHEN $2::int > 110 THEN FALSE ELSE TRUE END
+                            ELSE
+                              CASE WHEN $2::int <= red_cm THEN TRUE ELSE FALSE END
+                          END
      WHERE id = $1
      RETURNING trigger_dist AS new_flag,
                red_cm, sms_limit, phone, phone2, tel_do_szambiarza,

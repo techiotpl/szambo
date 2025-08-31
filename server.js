@@ -1538,19 +1538,22 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
     }
     const q = `
       SELECT
-        c.id          AS client_id,
-        c.email       AS client_email,
-        c.name        AS client_name,
-        c.street      AS client_street,
+        c.id                    AS client_id,
+        c.email                 AS client_email,
+        c.name                  AS client_name,
+        c.street                AS client_street,
         d.serial_number,
-        d.name        AS device_name,
-        d.street      AS device_street,
+        d.name                  AS device_name,
+        d.street                AS device_street,
         d.lat, d.lon,
-        (d.params->>'distance')::int AS distance
-  FROM firm_clients fc
-  JOIN users   c ON c.id = fc.client_user_id
-  LEFT JOIN devices d ON d.user_id = c.id
-  WHERE fc.firm_user_id = $1
+        COALESCE(d.distance_cm, NULLIF((d.params->>'distance')::int, 0)) AS distance_cm,
+        d.red_cm,
+        d.trigger_dist,
+        d.device_type
+      FROM firm_clients fc
+      JOIN users   c ON c.id = fc.client_user_id
+      LEFT JOIN devices d ON d.user_id = c.id
+      WHERE fc.firm_user_id = $1
       ORDER BY c.email, d.serial_number`;
     const { rows } = await db.query(q, [req.user.id]);
     return res.json(rows);

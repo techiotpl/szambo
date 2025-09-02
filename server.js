@@ -398,9 +398,6 @@ CREATE INDEX IF NOT EXISTS idx_company_clients_client  ON company_clients(client
 
 
 
-
-
-
 -- 4) user_consents – wymagane przez consentGuard
 CREATE TABLE IF NOT EXISTS user_consents (
   id         BIGSERIAL PRIMARY KEY,
@@ -465,6 +462,14 @@ CREATE TABLE IF NOT EXISTS firm_clients (
 -- Współrzędne na devices (jeśli jeszcze nie ma)
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6);
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS lon NUMERIC(9,6);
+
+
+ALTER TABLE firm_clients
+  ADD COLUMN IF NOT EXISTS label TEXT,  -- alias/friendly name nadawany przez firmę
+  ADD COLUMN IF NOT EXISTS note  TEXT;  -- (opcjonalnie) notatka firmy
+
+
+
 
 `; 
 
@@ -679,6 +684,85 @@ app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
      GROUP BY u.id`;
   const { rows } = await db.query(q);
   res.json(rows);
+});
+
+async function firmOnly(req, res, next) {
+  try {
+    const { rows } = await db.query('SELECT customer_type FROM users WHERE id = $1', [req.user.id]);
+    if (!rows.length || (rows[0].customer_type || 'client') !== 'firmowy') {
+      return res.status(403).send('FORBIDDEN_NOT_FIRM');
+    }
+    next();
+  } catch (e) {
+    console.error('firmOnly err', e);
+    res.status(500).send('server error');
+  }
+}
+
+// POST /firm/clients/attach  { email, label? }
+app.post('/firm/clients/attach', auth, consentGuard, firmOnly, async (req, res) => {
+  const em    = String(req.body?.email || '').toLowerCase().trim();
+  const label = req.body?.label ? String(req.body.label).trim() : null;
+  if (!em || !em.includes('@')) return res.status(400).send('invalid email');
+
+  try {
+    const { rows:u } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [em]);
+    if (!u.length) return res.status(404).send('user not found');
+
+    await db.query(
+      `INSERT INTO firm_clients(firm_user_id, client_user_id, label)
+       VALUES($1,$2,$3)
+       ON CONFLICT (firm_user_id, client_user_id)
+       DO UPDATE SET label = EXCLUDED.label`,
+      [req.user.id, u[0].id, label]
+    );
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('POST /firm/clients/attach', e);
+    return res.status(500).send('server error');
+  }
+});
+
+// PATCH /firm/clients/:client_email/label  { label }
+app.patch('/firm/clients/:client_email/label', auth, consentGuard, firmOnly, async (req, res) => {
+  const clientEmail = String(req.params.client_email || '').toLowerCase().trim();
+  const label = (req.body && 'label' in req.body) ? String(req.body.label || '').trim() : null;
+
+  try {
+    const { rows:c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
+    if (!c.length) return res.status(404).send('client not found');
+
+    const r = await db.query(
+      `UPDATE firm_clients SET label = $1
+         WHERE firm_user_id = $2 AND client_user_id = $3`,
+      [label || null, req.user.id, c[0].id]
+    );
+    if (!r.rowCount) return res.status(404).send('relation not found');
+
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('PATCH /firm/clients/:email/label', e);
+    return res.status(500).send('server error');
+  }
+});
+// DELETE /firm/clients/:client_email
+app.delete('/firm/clients/:client_email', auth, consentGuard, firmOnly, async (req, res) => {
+  const clientEmail = String(req.params.client_email || '').toLowerCase().trim();
+  try {
+    const { rows:c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
+    if (!c.length) return res.status(404).send('client not found');
+
+    const r = await db.query(
+      'DELETE FROM firm_clients WHERE firm_user_id=$1 AND client_user_id=$2',
+      [req.user.id, c[0].id]
+    );
+    if (!r.rowCount) return res.status(404).send('relation not found');
+
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('DELETE /firm/clients/:email', e);
+    return res.status(500).send('server error');
+  }
 });
 
 
@@ -1542,6 +1626,7 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
         c.email       AS client_email,
         c.name        AS client_name,
         c.street      AS client_street,
+		fc.label      AS client_label,                  -- ⬅️ NOWE
         d.serial_number,
         d.name        AS device_name,
         d.street      AS device_street,

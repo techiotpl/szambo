@@ -467,6 +467,8 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS lon NUMERIC(9,6);
 ALTER TABLE firm_clients
   ADD COLUMN IF NOT EXISTS label TEXT,  -- alias/friendly name nadawany przez firmę
   ADD COLUMN IF NOT EXISTS note  TEXT;  -- (opcjonalnie) notatka firmy
+-- alias (friendly name) nadawany przez firmę klientowi
+ALTER TABLE firm_clients ADD COLUMN IF NOT EXISTS label TEXT;
 
 
 
@@ -1624,6 +1626,7 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
       SELECT
         c.id          AS client_id,
         c.email       AS client_email,
+		COALESCE(fc.label, c.name) AS client_name,  -- << TU JEST TWEAK
         c.name        AS client_name,
         c.street      AS client_street,
 		fc.label      AS client_label,                  -- ⬅️ NOWE

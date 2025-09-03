@@ -476,6 +476,11 @@ CREATE INDEX IF NOT EXISTS idx_devices_phone2 ON devices (phone2);
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS allow_company_attach BOOLEAN DEFAULT FALSE;
 
+  ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS allow_company_attach BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS allow_company_attach_ts TIMESTAMPTZ;
+
+
 `; 
 
 

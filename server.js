@@ -904,10 +904,10 @@ app.patch('/me/firm-consent', auth, consentGuard, async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // TYLKO flaga, bez *_ts
     await client.query(
       `UPDATE users
-          SET allow_company_attach = $1,
-              allow_company_attach_ts = now()
+          SET allow_company_attach = $1
         WHERE id = $2`,
       [allow, req.user.id]
     );

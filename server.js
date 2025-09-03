@@ -1828,28 +1828,102 @@ app.delete('/admin/device/:serial', auth, adminOnly, async (req, res) => {
   }
 });
 
-// POST /admin/firm/:firm_email/clients  { client_email }
-// Dodaje klienta do firmy (obie strony istnieją jako users)
-app.post('/admin/firm/:firm_email/clients', auth, adminOnly, async (req, res) => {
-  const firmEmail   = String(req.params.firm_email || '').toLowerCase().trim();
-  const clientEmail = String(req.body?.client_email || '').toLowerCase().trim();
-	console.log(`[ADMIN attach] firm=${firmEmail} client=${clientEmail}`);
-  if (!firmEmail || !clientEmail) return res.status(400).send('firm_email & client_email required');
+// helper: tylko cyfry
+function digitsOnly(s) {
+  return String(s || '').replace(/\D+/g, '');
+}
+
+// POST /admin/firm/:firmEmail/clients
+// Body: { client_email?: string, client_phone?: string, label?: string }
+app.post('/admin/firm/:firmEmail/clients', requireAdmin, async (req, res) => {
+  const firmEmail = String(req.params.firmEmail || '').trim().toLowerCase();
+  const clientEmail = (req.body.client_email || '').trim().toLowerCase();
+  const clientPhoneRaw = req.body.client_phone || '';
+  const label = (req.body.label || '').toString();
+
+  if (!firmEmail) {
+    return res.status(400).send('firm_email required in URL');
+  }
+  if (!clientEmail && !clientPhoneRaw) {
+    return res.status(400).send('provide client_email or client_phone');
+  }
+
   try {
-    const { rows: f } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [firmEmail]);
-    const { rows: c } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [clientEmail]);
-    if (!f.length || !c.length) return res.status(404).send('firm or client not found');
-    await db.query(
-     `INSERT INTO firm_clients(firm_user_id, client_user_id) VALUES($1,$2)
-       ON CONFLICT DO NOTHING`,
-      [f[0].id, c[0].id]
+    // 1) firma
+    const firmQ = await db.query(
+      'SELECT id, email FROM users WHERE lower(email) = lower($1) LIMIT 1',
+      [firmEmail]
     );
-    return res.sendStatus(200);
+    if (firmQ.rowCount === 0) {
+      return res.status(404).send('firm not found');
+    }
+    const firmId = firmQ.rows[0].id;
+
+    // 2) klient -> po e-mailu albo po telefonie z devices(septic)
+    let clientId = null;
+    let resolvedClientEmail = null;
+
+    if (clientEmail) {
+      const cQ = await db.query(
+        'SELECT id, email FROM users WHERE lower(email) = lower($1) LIMIT 1',
+        [clientEmail]
+      );
+      if (cQ.rowCount === 0) return res.status(404).send('client (email) not found');
+      clientId = cQ.rows[0].id;
+      resolvedClientEmail = cQ.rows[0].email;
+    } else {
+      const digits = digitsOnly(clientPhoneRaw);
+      if (!digits) return res.status(400).send('invalid phone');
+
+      // przygotuj warianty: np. 515... i 48 515...
+      const with48 = digits.startsWith('48') ? digits : '48' + digits;
+
+      // Szukamy właściciela septic-a po numerze z devices.phone
+      const dQ = await db.query(
+        `
+        SELECT DISTINCT d.user_id AS id
+        FROM devices d
+        WHERE lower(d.device_type) = 'septic'
+          AND d.user_id IS NOT NULL
+          AND regexp_replace(coalesce(d.phone,''), '\\D', '', 'g') IN ($1, $2)
+        LIMIT 1
+        `,
+        [digits, with48]
+      );
+      if (dQ.rowCount === 0) {
+        return res.status(404).send('client (by device phone) not found');
+      }
+      clientId = dQ.rows[0].id;
+
+      // dociągnij e-mail klienta (do odpowiedzi)
+      const ce = await db.query('SELECT email FROM users WHERE id = $1', [clientId]);
+      resolvedClientEmail = ce.rows[0]?.email || null;
+    }
+
+    // 3) INSERT/UPSERT do firm_clients
+    const up = await db.query(
+      `
+      INSERT INTO firm_clients (firm_user_id, client_user_id, label)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (firm_user_id, client_user_id)
+      DO UPDATE SET label = COALESCE(EXCLUDED.label, firm_clients.label)
+      RETURNING firm_user_id, client_user_id, label
+      `,
+      [firmId, clientId, label || null]
+    );
+
+    return res.json({
+      ok: true,
+      firm_email: firmEmail,
+      client_email: resolvedClientEmail,
+      label: up.rows[0].label,
+    });
   } catch (e) {
-    console.error('❌ /admin/firm/:firm_email/clients', e);
-    return res.status(500).send('server error');
+    console.error('[admin attach]', e);
+    return res.status(500).send('internal error');
   }
 });
+
 
 // DELETE /admin/firm/:firm_email/clients/:client_email — usuwa powiązanie
 app.delete('/admin/firm/:firm_email/clients/:client_email', auth, adminOnly, async (req, res) => {

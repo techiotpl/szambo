@@ -473,7 +473,8 @@ ALTER TABLE firm_clients ADD COLUMN IF NOT EXISTS label TEXT;
 CREATE INDEX IF NOT EXISTS idx_devices_phone  ON devices (phone);
 CREATE INDEX IF NOT EXISTS idx_devices_phone2 ON devices (phone2);
 
-
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS allow_company_attach BOOLEAN DEFAULT FALSE;
 
 `; 
 
@@ -763,6 +764,35 @@ app.post('/firm/clients/attach', auth, consentGuard, firmOnly, async (req, res) 
       client = rows[0];
     }
 
+// ... mamy już: let client = { id, email } wyłuskany po emailu/telefonie
+
+// ⬇️ NOWE: sprawdź zgodę użytkownika
+{
+  const { rows: ccons } = await db.query(
+    'SELECT allow_company_attach FROM users WHERE id = $1',
+    [client.id]
+  );
+  const allow = ccons[0]?.allow_company_attach === true;
+  if (!allow) {
+    return res.status(403).json({ message: 'CLIENT_NO_CONSENT' });
+  }
+}
+// GET /me/companies — firmy, które mają użytkownika na liście
+app.get('/me/companies', auth, consentGuard, async (req, res) => {
+  const q = `
+    SELECT f.email AS firm_email,
+           COALESCE(f.name, f.company, f.email) AS firm_name,
+           fc.label
+      FROM firm_clients fc
+      JOIN users f ON f.id = fc.firm_user_id
+     WHERE fc.client_user_id = $1
+     ORDER BY firm_email`;
+  const { rows } = await db.query(q, [req.user.id]);
+  res.json(rows);
+});
+
+
+	  
     // UPSERT powiązania + label
     await db.query(
       `INSERT INTO firm_clients (firm_user_id, client_user_id, label)
@@ -850,6 +880,52 @@ function consentGuard(req, res, next) {
       res.status(500).send('server error');
     });
 }
+
+// GET /me/firm-consent — stan zgody ---->> zgoda  czy  moze dodac 
+app.get('/me/firm-consent', auth, consentGuard, async (req, res) => {
+  const { rows } = await db.query(
+    'SELECT allow_company_attach FROM users WHERE id = $1',
+    [req.user.id]
+  );
+  if (!rows.length) return res.status(404).send('user not found');
+  res.json({ allow: rows[0].allow_company_attach === true });
+});
+
+// PATCH /me/firm-consent { allow: boolean }
+//  • gdy allow=false → kasujemy wszystkie powiązania firmowe dla tego usera
+app.patch('/me/firm-consent', auth, consentGuard, async (req, res) => {
+  const allow = req.body?.allow === true;
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(
+      `UPDATE users
+          SET allow_company_attach = $1,
+              allow_company_attach_ts = now()
+        WHERE id = $2`,
+      [allow, req.user.id]
+    );
+
+    if (!allow) {
+      await client.query(
+        'DELETE FROM firm_clients WHERE client_user_id = $1',
+        [req.user.id]
+      );
+    }
+
+    await client.query('COMMIT');
+    return res.status(200).json({ ok: true, allow });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('PATCH /me/firm-consent', e);
+    return res.status(500).send('server error');
+  } finally {
+    client.release();
+  }
+});
+
+
 
 
 //-------------------------------------------------------------

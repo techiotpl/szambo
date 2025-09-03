@@ -470,6 +470,8 @@ ALTER TABLE firm_clients
 -- alias (friendly name) nadawany przez firmę klientowi
 ALTER TABLE firm_clients ADD COLUMN IF NOT EXISTS label TEXT;
 
+CREATE INDEX IF NOT EXISTS idx_devices_phone  ON devices (phone);
+CREATE INDEX IF NOT EXISTS idx_devices_phone2 ON devices (phone2);
 
 
 
@@ -701,29 +703,86 @@ async function firmOnly(req, res, next) {
   }
 }
 
-// POST /firm/clients/attach  { email, label? }
+// pomocniczo – normalizacja numeru (bardzo prosta)
+function normalizePhone(p) {
+  if (!p) return '';
+  let s = String(p).trim();
+  // usuń spacje, myślniki, nawiasy
+  s = s.replace(/[()\s-]+/g, '');
+  // jeżeli polski 9-cyfrowy bez prefiksu, dołóż +48
+  if (/^\d{9}$/.test(s)) s = '+48' + s;
+  return s;
+}
+
 app.post('/firm/clients/attach', auth, consentGuard, firmOnly, async (req, res) => {
-  const em    = String(req.body?.email || '').toLowerCase().trim();
-  const label = req.body?.label ? String(req.body.label).trim() : null;
-  if (!em || !em.includes('@')) return res.status(400).send('invalid email');
-
   try {
-    const { rows:u } = await db.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1)', [em]);
-    if (!u.length) return res.status(404).send('user not found');
+    const emailRaw = (req.body?.email || '').toString().trim().toLowerCase();
+    const phoneRaw = (req.body?.phone || '').toString().trim();
+    const label    = (req.body?.label || '').toString().trim() || null;
 
+    const hasEmail = !!emailRaw;
+    const hasPhone = !!phoneRaw;
+
+    if (!hasEmail && !hasPhone) {
+      return res.status(400).json({ message: 'Provide email or phone' });
+    }
+
+    let client; // { id, email }
+
+    if (hasEmail) {
+      const { rows } = await db.query(
+        'SELECT id, email FROM users WHERE LOWER(email)=LOWER($1)',
+        [emailRaw]
+      );
+      if (!rows.length) return res.status(404).json({ message: 'CLIENT_NOT_FOUND' });
+      client = rows[0];
+    } else {
+      const phone = normalizePhone(phoneRaw);
+      if (!phone) return res.status(400).json({ message: 'INVALID_PHONE' });
+
+      // znajdź unikalnego właściciela urządzenia septic z tym numerem
+      const q = `
+        SELECT DISTINCT u.id, u.email
+        FROM devices d
+        JOIN users u ON u.id = d.user_id
+        WHERE (d.phone = $1 OR d.phone2 = $1)
+          AND LOWER(COALESCE(d.device_type,'')) = 'septic'
+      `;
+      const { rows } = await db.query(q, [phone]);
+
+      if (rows.length === 0) {
+        return res.status(404).json({ message: 'PHONE_NOT_FOUND', phone });
+      }
+      if (rows.length > 1) {
+        return res.status(409).json({
+          message: 'PHONE_AMBIGUOUS',
+          phone,
+          matches: rows.map(r => r.email)
+        });
+      }
+      client = rows[0];
+    }
+
+    // UPSERT powiązania + label
     await db.query(
-      `INSERT INTO firm_clients(firm_user_id, client_user_id, label)
-       VALUES($1,$2,$3)
+      `INSERT INTO firm_clients (firm_user_id, client_user_id, label)
+       VALUES ($1,$2,$3)
        ON CONFLICT (firm_user_id, client_user_id)
        DO UPDATE SET label = EXCLUDED.label`,
-      [req.user.id, u[0].id, label]
+      [req.user.id, client.id, label]
     );
-    return res.sendStatus(200);
+
+    return res.status(200).json({
+      ok: true,
+      client_email: client.email,
+      using: hasEmail ? 'email' : 'phone',
+    });
   } catch (e) {
-    console.error('POST /firm/clients/attach', e);
-    return res.status(500).send('server error');
+    console.error('attach error', e);
+    return res.status(500).json({ message: 'server error' });
   }
 });
+
 
 // PATCH /firm/clients/:client_email/label  { label }
 app.patch('/firm/clients/:client_email/label', auth, consentGuard, firmOnly, async (req, res) => {

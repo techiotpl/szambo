@@ -782,19 +782,7 @@ app.post('/firm/clients/attach', auth, consentGuard, firmOnly, async (req, res) 
     return res.status(403).json({ message: 'CLIENT_NO_CONSENT' });
   }
 }
-// GET /me/companies — firmy, które mają użytkownika na liście
-app.get('/me/companies', auth, consentGuard, async (req, res) => {
-  const q = `
-    SELECT f.email AS firm_email,
-           COALESCE(f.name, f.company, f.email) AS firm_name,
-           fc.label
-      FROM firm_clients fc
-      JOIN users f ON f.id = fc.firm_user_id
-     WHERE fc.client_user_id = $1
-     ORDER BY firm_email`;
-  const { rows } = await db.query(q, [req.user.id]);
-  res.json(rows);
-});
+
 
 
 	  
@@ -885,6 +873,48 @@ function consentGuard(req, res, next) {
       res.status(500).send('server error');
     });
 }
+
+// GET /me/companies → firmy, które przypięły zalogowanego klienta
+// Zwraca: [{ firm_email, company, street, label }]
+app.get('/me/companies', auth, consentGuard, async (req, res) => {
+  try {
+    // (opcjonalny guard — zgodny z frontem, który i tak nie pobiera listy, gdy zgoda=FALSE)
+    const { rows: cons } = await db.query(
+      'SELECT allow_company_attach FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (cons[0]?.allow_company_attach !== true) {
+      return res.json([]); // brak zgody → pusta lista
+    }
+
+    const q = `
+      SELECT
+        f.email   AS firm_email,
+        f.company AS company,   -- tylko users.company (bez fallbacków)
+        f.street  AS street,    -- tylko users.street
+        fc.label  AS label
+      FROM firm_clients fc
+      JOIN users f
+        ON f.id = fc.firm_user_id
+      WHERE fc.client_user_id = $1
+      ORDER BY lower(coalesce(f.company, '')), lower(f.email)
+    `;
+    const { rows } = await db.query(q, [req.user.id]);
+
+    // Front oczekuje płaskich pól "company" i "street"
+    res.json(rows.map(r => ({
+      firm_email: r.firm_email,
+      company:    r.company || '',
+      street:     r.street  || '',
+      label:      r.label ?? null
+    })));
+  } catch (e) {
+    console.error('GET /me/companies error:', e);
+    res.status(500).send('server error');
+  }
+});
+
+
 
 // GET /me/firm-consent — stan zgody ---->> zgoda  czy  moze dodac 
 app.get('/me/firm-consent', auth, consentGuard, async (req, res) => {

@@ -1339,18 +1339,29 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
 });
 
 // PATCH /admin/user/:email/params — admin zmienia parametry użytkownika
-// dozwolone: name, company, street, phone, is_active, customer_type
+const bcrypt = require('bcryptjs'); // <-- DODANE
 app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
   const email = String(req.params.email || '').toLowerCase().trim();
   if (!email || !email.includes('@')) return res.status(400).send('invalid email param');
 
-  const allowed = new Set(['name','company','street','phone','is_active','customer_type']);
+  const allowed = new Set(['name','company','street','phone','is_active','customer_type','password']]);
   const cols = [];
   const vals = [];
   let i = 1;
+	let pendingPassword = null; // hasło przetworzymy po pętli
 
   for (const [k, raw] of Object.entries(req.body || {})) {
     if (!allowed.has(k)) return res.status(400).send(`field ${k} not allowed`);
+
+
+    // password → walidacja i odłożenie, NIE wrzucamy surowego do SQL
+    if (k === 'password') {
+      const pwd = String(raw || '').trim();
+      if (!pwd) continue; // puste pole ignorujemy
+      if (pwd.length < 8) return res.status(400).send('password too short (min 8)');
+      pendingPassword = pwd;
+      continue;
+    }
 
     if (k === 'is_active') {
       if (typeof raw !== 'boolean') return res.status(400).send('is_active must be boolean');
@@ -1381,7 +1392,15 @@ app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
     }
   }
 
-  if (!cols.length) return res.status(400).send('nothing to update');
+    // jeżeli przyszło hasło → hashujemy i dopinamy do tego samego UPDATE
+  if (pendingPassword) {
+    const hash = await bcrypt.hash(pendingPassword, 10);
+    // ZMIEŃ 'password_hash' jeśli masz inną nazwę kolumny na hash:
+    cols.push(`password_hash = $${i++}`);
+    vals.push(hash);
+  }
+
+
   vals.push(email);
 
   try {

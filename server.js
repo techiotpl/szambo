@@ -1513,7 +1513,7 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
         COALESCE(d.distance_cm, NULLIF((d.params->>'distance')::int, 0)) AS distance_cm,
         d.red_cm,
         d.trigger_dist,
-        d.device_type
+        d.device_type,
 		d.phone AS phone                    -- ⬅️ TU
       FROM firm_clients fc
       JOIN users   c ON c.id = fc.client_user_id

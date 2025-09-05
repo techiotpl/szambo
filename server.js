@@ -1514,6 +1514,7 @@ app.get('/firm/clients', auth, consentGuard, async (req, res) => {
         d.red_cm,
         d.trigger_dist,
         d.device_type
+		d.phone AS phone                    -- ⬅️ TU
       FROM firm_clients fc
       JOIN users   c ON c.id = fc.client_user_id
       LEFT JOIN devices d ON d.user_id = c.id

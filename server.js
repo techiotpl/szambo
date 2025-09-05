@@ -1339,7 +1339,7 @@ app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
 });
 
 // PATCH /admin/user/:email/params — admin zmienia parametry użytkownika
-const bcrypt = require('bcryptjs'); // <-- DODANE
+
 app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
   const email = String(req.params.email || '').toLowerCase().trim();
   if (!email || !email.includes('@')) return res.status(400).send('invalid email param');

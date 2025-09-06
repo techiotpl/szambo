@@ -2056,16 +2056,17 @@ function ensureUplinkBearer(req, res, next) {
 app.post('/uplink', ensureUplinkBearer, async (req, res) => {
   try {
     // Złap wszystkie popularne warianty z ChirpStacka
-    const rawDevEui =
-      req.body?.deviceInfo?.devEui ??
-      req.body?.devEui ??
-      req.body?.dev_eui ??
-      req.body?.devEUI ??
-      null;
-    if (!rawDevEui) return res.status(400).send('dev_eui missing');
-    // 🔑 NORMALIZACJA: zapis i porównywanie zawsze WIELKIMI
-    const devEui = String(rawDevEui).trim().toUpperCase();
+const rawDevEui =
+  req.body?.deviceInfo?.devEui ??
+  req.body?.devEui ??
+  req.body?.dev_eui ??
+  req.body?.devEUI ?? null;
+if (!rawDevEui) return res.status(400).send('dev_eui missing');
 
+// 🔧 Sanitizacja: usuń wszystko poza [0-9a-f] i dopiero potem UPPER
+const devEui = String(rawDevEui).replace(/[^0-9a-f]/gi, '').toUpperCase();
+
+console.log(`[UPLINK] RX EUI raw="${rawDevEui}" → norm="${devEui}"`);
     // 1) pobieramy urządzenie
     const { rows } = await db.query('SELECT * FROM devices WHERE serial_number=$1', [devEui]);
     if (!rows.length) return res.status(404).send('unknown device');

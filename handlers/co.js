@@ -89,6 +89,8 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const tsIso = extractUplinkIso(body);
   await resetStaleAfterUplink(db, dev.id, tsIso);
 
+  console.log(`[CO] ENTER serial=${serial} user_id=${dev.user_id} tsIso=${tsIso}`);
+
   // ppm (priorytet: coConcentration.value)
   let ppm = null;
   if (obj.coConcentration && typeof obj.coConcentration === 'object' && obj.coConcentration.value != null) {
@@ -98,6 +100,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   } else if (obj.co != null) {
     ppm = Number(obj.co);
   }
+  if (Number.isNaN(ppm)) ppm = null;
 
   // battery
   const batteryLevel = obj.energyStatus || null;
@@ -118,14 +121,12 @@ module.exports.handleUplink = async function (utils, dev, body) {
   const threshold = Number(dev.co_threshold_ppm || 50);
 
   // logika wejścia w alarm
-  if (ppm != null && ppm >= threshold) {
-    alarm = true;
-  }
+  if (ppm != null && ppm >= threshold) alarm = true;
 
   // reset przy ppm <= 5
   if (ppm != null && ppm <= 5 && prev === true) {
     alarm = false;
-    await db.query(
+    const r0 = await db.query(
       `UPDATE devices
           SET co_status = false,
               co_last_change_ts = now(),
@@ -133,18 +134,16 @@ module.exports.handleUplink = async function (utils, dev, body) {
         WHERE id = $2`,
       [ppm, dev.id]
     );
-    console.log(`[CO] RESET alarm (ppm<=5) serial=${serial}`);
+    console.log(`[CO] RESET alarm (ppm<=5) serial=${serial} rows=${r0.rowCount}`);
   }
 
-  console.log(
-    `[CO] RX ${serial} obj=${JSON.stringify(obj)} → alarm=${alarm} ppm=${ppm ?? 'n/a'} prev=${prev}`
-  );
+  console.log(`[CO] RX serial=${serial} → alarm=${alarm} ppm=${ppm ?? 'n/a'} prev=${prev} battV=${battV ?? 'n/a'}`);
 
   // jeśli zmiana stanu
   if (alarm !== prev) {
     console.log(`[CO] CHANGE ${serial}: ${prev} → ${alarm}`);
     try {
-      await db.query(
+      const r1 = await db.query(
         `UPDATE devices
             SET co_status = $1,
                 co_last_change_ts = now(),
@@ -154,6 +153,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
           WHERE id = $5`,
         [alarm, tsIso, ppm, battV, dev.id]
       );
+      console.log(`[CO] UPDATE(change) rows=${r1.rowCount} serial=${serial}`);
     } catch (e) {
       console.error('[CO] DB update(change) error:', e);
     }
@@ -225,7 +225,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
   } else {
     // brak zmiany – tylko update pól pomocniczych
     try {
-      await db.query(
+      const r2 = await db.query(
         `UPDATE devices
             SET co_last_uplink_ts = $1::timestamptz,
                 co_ppm = COALESCE($2, co_ppm),
@@ -233,6 +233,7 @@ module.exports.handleUplink = async function (utils, dev, body) {
           WHERE id = $4`,
         [tsIso, ppm, battV, dev.id]
       );
+      console.log(`[CO] UPDATE(no-change) rows=${r2.rowCount} serial=${serial}`);
     } catch (e) {
       console.error('[CO] DB update(no-change) error:', e);
     }

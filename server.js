@@ -1326,17 +1326,38 @@ app.post('/public/register', async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /admin/create-user — tworzenie użytkownika (wymaga auth+adminOnly)
+//  • bez crashy na duplikacie (ON CONFLICT DO NOTHING)
+//  • zwraca 409 USER_EXISTS gdy e-mail już jest
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/admin/create-user', auth, adminOnly, async (req, res) => {
-  const { email, password, role='client', name='', company='' } = req.body;
-  console.log(`➕ [POST /admin/create-user] Tworzę usera: ${email}`);
-  const hash = await bcrypt.hash(password, 10);
-  await db.query(
-    'INSERT INTO users(email,password_hash,role,name,company,confirmed) VALUES($1,$2,$3,$4,$5,TRUE)',
-    [email.toLowerCase(), hash, role, name, company]
-  );
-  console.log(`✅ [POST /admin/create-user] Użytkownik ${email} utworzony.`);
-  res.send('User created');
+  try {
+    let { email, password, role = 'client', name = '', company = '' } = req.body || {};
+    const em = String(email || '').trim().toLowerCase();
+    if (!em || !em.includes('@')) return res.status(400).send('invalid email');
+    if (!password || String(password).length < 8) {
+      // brak/krótkie hasło → wygeneruj 8 heksów (opcjonalnie pokażesz w UI)
+      password = randomHex(4);
+    }
+    if (!['client','firmowy','admin'].includes(role)) role = 'client';
+
+    const hash = await bcrypt.hash(String(password), 10);
+    const q = `
+      INSERT INTO users (email, password_hash, role, name, company, confirmed)
+      VALUES ($1, $2, $3, $4, $5, TRUE)
+      ON CONFLICT (email) DO NOTHING
+      RETURNING id`;
+    const r = await db.query(q, [em, hash, role, name || null, company || null]);
+
+    if (r.rowCount === 0) {
+      console.log(`⚠️ [POST /admin/create-user] Użytkownik już istnieje: ${em}`);
+      return res.status(409).json({ message: 'USER_EXISTS' });
+    }
+    console.log(`✅ [POST /admin/create-user] Utworzono: ${em} (id=${r.rows[0].id})`);
+    return res.status(201).json({ ok: true });
+  } catch (e) {
+    console.error('❌ [POST /admin/create-user] DB error:', e);
+    return res.status(500).send('server error');
+  }
 });
 
 // PATCH /admin/user/:email/params — admin zmienia parametry użytkownika

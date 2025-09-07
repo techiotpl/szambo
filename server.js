@@ -15,6 +15,7 @@ const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
 const { geocodeAddress } = require('./geocode'); 
+const { logDeviceSummary } = require('./handlers/logi');  // ← logger „karty”
 
 const handlers = {
   septic: require('./handlers/septic'),
@@ -2066,7 +2067,7 @@ if (!rawDevEui) return res.status(400).send('dev_eui missing');
 // 🔧 Sanitizacja: usuń wszystko poza [0-9a-f] i dopiero potem UPPER
 const devEui = String(rawDevEui).replace(/[^0-9a-f]/gi, '').toUpperCase();
 
-console.log(`[UPLINK] RX EUI raw="${rawDevEui}" → norm="${devEui}"`);
+//console.log(`[UPLINK] RX EUI raw="${rawDevEui}" → norm="${devEui}"`);
     // 1) pobieramy urządzenie
     const { rows } = await db.query('SELECT * FROM devices WHERE serial_number=$1', [devEui]);
     if (!rows.length) return res.status(404).send('unknown device');
@@ -2074,6 +2075,10 @@ console.log(`[UPLINK] RX EUI raw="${rawDevEui}" → norm="${devEui}"`);
     const dev     = rows[0];
     const type    = (dev.device_type || 'septic').toLowerCase();   // default
     const handler = handlers[type] || handlers.septic;             // fallback
+
+	      // 🔎 zwięzły log kontekstu urządzenia (tylko niepuste pola)
+    try { await logDeviceSummary(db, dev); }
+    catch (e) { console.warn('[UPLINK][DEV] summary error:', e.message); }
 
     // 2) delegujemy całą logikę do modułu w handlers/
     await handler.handleUplink(

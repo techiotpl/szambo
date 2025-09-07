@@ -94,7 +94,7 @@ const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').
 
 
 
-async function geocodeAndUpdateDeviceBySerial(serial) {
+async function geocodeAndUpdateDeviceBySerial(serial, { force = false } = {}) {
   try {
     const { rows } = await db.query(
       `SELECT street, lat, lon FROM devices WHERE serial_number=$1 LIMIT 1`,
@@ -107,7 +107,7 @@ async function geocodeAndUpdateDeviceBySerial(serial) {
     const { street, lat, lon } = rows[0];
     console.log(`geo: start serial=${serial} street="${street}" lat=${lat} lon=${lon}`);
     if (!street) return { ok: false, reason: 'no_street' };
-    if (lat != null && lon != null) return { ok: true, reason: 'already' };
+    if (!force && lat != null && lon != null) return { ok: true, reason: 'already' };
 
     // przygotuj warianty: "ulica nr, miasto" i "miasto, ulica nr"
     const s = String(street).trim().replace(/\s*,\s*/g, ', ');
@@ -152,6 +152,49 @@ async function geocodeAndUpdateDeviceBySerial(serial) {
   }
 }
 
+async function geocodeUserStreetAndUpdateSepticDevices(userId, streetRaw) {
+  try {
+    const s0 = String(streetRaw || '').trim();
+    if (!s0) return { ok: false, reason: 'no_street' };
+    // lekkie normalizacje i warianty jak w device-geocode
+    const s = s0.replace(/\s*,\s*/g, ', ');
+    const parts = s.split(',').map(v => v.trim());
+    const hasDigits = str => /\d/.test(str);
+    const variants = new Set();
+    if (parts.length === 2) {
+      const [a, b] = parts;
+      if (!hasDigits(a) && hasDigits(b)) variants.add(`${b}, ${a}, Polska`);
+      if (hasDigits(a) && !hasDigits(b)) variants.add(`${a}, ${b}, Polska`);
+    }
+    variants.add(`${s}, Polska`);
+    variants.add(`ul. ${s}, Polska`);
+
+    let coords = null;
+    for (const q of variants) {
+      console.log(`geo(profile): try "${q}"`);
+      coords = await geocodeAddress(q);
+      if (coords) break;
+    }
+    if (!coords) return { ok: false, reason: 'geocoder_miss' };
+
+    // 1) zapisz do users.lat/lon
+    await db.query('UPDATE users SET lat=$1, lon=$2 WHERE id=$3', [coords.lat, coords.lon, userId]);
+    // 2) zapisz do wszystkich septic tego usera, ale tylko tam, gdzie brak adresu lub brak współrzędnych
+    await db.query(
+      `UPDATE devices
+          SET lat=$1, lon=$2
+        WHERE user_id=$3
+          AND LOWER(COALESCE(device_type,''))='septic'
+          AND (street IS NULL OR street='' OR lat IS NULL OR lon IS NULL)`,
+      [coords.lat, coords.lon, userId]
+    );
+    console.log(`📍 geocode(profile) user=${userId} → ${coords.lat},${coords.lon}`);
+    return { ok: true, ...coords };
+  } catch (e) {
+    console.warn('⚠️ geocode(profile) failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
 
 
 
@@ -1461,6 +1504,12 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
   const vals = [];
   let i = 1;
 
+  const newStreet =
+    (typeof req.body?.street === 'string' && req.body.street.trim().length > 0)
+      ? req.body.street.trim()
+      : null;
+
+	
   for (const [k, v] of Object.entries(req.body || {})) {
     if (!allowed.has(k)) {
       return res.status(400).send(`field ${k} not allowed`);
@@ -1487,7 +1536,12 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
       vals
     );
     console.log(`✅ [PATCH /me/profile] updated ${cols.join(', ')} for`, req.user.email);
+       // geokoduj w tle, jeśli zaktualizowano ulicę
+    if (newStreet) {
+      geocodeUserStreetAndUpdateSepticDevices(req.user.id, newStreet).catch(()=>{});
+    }
     res.sendStatus(200);
+
   } catch (err) {
     console.error('❌ error in PATCH /me/profile:', err);
     res.status(500).send('server error');
@@ -2366,7 +2420,11 @@ app.patch('/device/:serial/params', auth, consentGuard, async (req, res) => {
       );
     }
 
-    // 5) Zwróć mały JSON, żeby front mógł odświeżyć nazwę bez dodatkowego GET
+        // 5) Jeśli zmieniono adres urządzenia → przelicz geolokację (force)
+    if (Object.prototype.hasOwnProperty.call(body, 'street')) {
+      geocodeAndUpdateDeviceBySerial(serial, { force: true }).catch(()=>{});
+    }
+    // Zwróć mały JSON, żeby front mógł odświeżyć nazwę bez dodatkowego GET
     return res.status(200).json({
       id: after.id,
       serial_number: after.serial_number,

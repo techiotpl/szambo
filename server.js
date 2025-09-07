@@ -1841,17 +1841,33 @@ const originalStreet = (street ?? '').toString().trim().replace(/\s*,\s*/g, ', '
         userId = u1.rows[0].id;
         userCreated = false;
         console.log(`ℹ️  user exists: ${em} (id=${userId}) — attach device only`);
-      } else {
-        // 2) tworzymy konto z losowym hasłem
-       basePwd = randomHex(4); // 8 znaków
+          } else {
+        // 2) tworzymy konto z losowym hasłem (z fallbackiem na duplikat)
+        basePwd = randomHex(4); // 8 znaków
         const hash = await bcrypt.hash(basePwd, 10);
-        const insU = await client.query(
-          'INSERT INTO users(email, password_hash, name, company, confirmed) VALUES ($1,$2,$3,$4,FALSE) RETURNING id',
-          [em, hash, userName, company]
-        );
-        userId = insU.rows[0].id;
-        userCreated = true;
-        console.log(`✅  created user ${em} (id=${userId})`);
+        try {
+          const insU = await client.query(
+            'INSERT INTO users(email, password_hash, name, company, confirmed) VALUES ($1,$2,$3,$4,FALSE) RETURNING id',
+            [em, hash, userName, company]
+          );
+          userId = insU.rows[0].id;
+          userCreated = true;
+          console.log(`✅  created user ${em} (id=${userId})`);
+        } catch (e) {
+          if (e && e.code === '23505') {
+            // ktoś utworzył tego usera "obok" – przełącz się na tryb attach
+            const u2 = await client.query(
+              'SELECT id FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1',
+              [em]
+            );
+            if (!u2.rowCount) throw e; // bardzo rzadkie – przerywamy normalnie
+            userId = u2.rows[0].id;
+            userCreated = false;
+            console.log(`ℹ️  user already existed during txn: ${em} (id=${userId})`);
+          } else {
+            throw e;
+          }
+        }
 
     // nadaj globalny abonament na 365 dni (gdyby default nie zadziałał)
     await client.query(

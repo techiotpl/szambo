@@ -32,9 +32,9 @@ const PRICE_SINGLE_DEVICE_GROSZE = 5000; // 50,00 zł
 
 // Ceny per typ urządzenia (endpoint /sms/orders/for-user)
 const PRICES_GROSZE = {
-  septic: 100,  // 1,00 zł  → ustaw np. 5999 dla 59,99 zł
-  leak:   200,  // 2,00 zł
-  co:     300   // 3,00 zł
+  septic: 5999,  // 1,00 zł  → ustaw np. 5999 dla 59,99 zł
+  leak:   2000,  // 2,00 zł
+  co:     3000   // 3,00 zł
 };
 
 // Ile SMS dodać po udanej płatności (top-up na konto – tabela users)

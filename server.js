@@ -78,7 +78,7 @@ app.use(helmet());
 app.set('trust proxy', 1);
 
 // ───────────────  REKLAMY (/ads)  ───────────────
-registerAdsRoute(app, db);
+registerAdsRoute(app);
 
 
 const PORT = process.env.PORT || 3000;

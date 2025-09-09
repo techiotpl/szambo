@@ -140,10 +140,15 @@ async function geocodeAndUpdateDeviceBySerial(serial, { force = false } = {}) {
       console.warn(`geo: miss serial=${serial} after ${variants.size} variants`);
       return { ok: false, reason: 'geocoder_miss' };
     }
-    await db.query(
-      `UPDATE devices SET lat=$1, lon=$2 WHERE serial_number=$3`,
-      [coords.lat, coords.lon, serial]
-    );
+ await db.query(
+   `UPDATE devices
+       SET lat=$1,
+           lon=$2,
+           city   = COALESCE($3, city),
+           region = COALESCE($4, region)
+     WHERE serial_number=$5`,
+   [coords.lat, coords.lon, coords.city || null, coords.region || null, serial]
+ );
     console.log(`📍 geocoded ${serial} → ${coords.lat},${coords.lon}`);
     return { ok: true, lat: coords.lat, lon: coords.lon };
   } catch (e) {
@@ -1540,7 +1545,37 @@ app.patch(['/me/profile','/me/profile/'], auth, consentGuard, async (req, res) =
     if (newStreet) {
       geocodeUserStreetAndUpdateSepticDevices(req.user.id, newStreet).catch(()=>{});
     }
-    res.sendStatus(200);
+       // ⬇️ GEO po zmianie ulicy (opcjonalnie – robi się „od ręki”)
+    if (Object.prototype.hasOwnProperty.call(req.body, 'street')) {
+      const s = String(req.body.street || '').trim();
+      if (s.length >= 3) {
+        try {
+          const coords = await geocodeAddress(`${s}, Polska`);
+          if (coords) {
+            // users: zawsze aktualizuj lat/lon; city/region gdy znamy
+            await db.query(
+              `UPDATE users
+                  SET lat=$1, lon=$2, city=$3, region=$4
+                WHERE id=$5`,
+              [coords.lat, coords.lon, coords.city || null, coords.region || null, req.user.id]
+            );
+            // devices: uzupełnij tylko tam, gdzie brak lat/lon
+            await db.query(
+              `UPDATE devices
+                  SET lat=$1, lon=$2,
+                      city   = COALESCE($3, city),
+                      region = COALESCE($4, region)
+                WHERE user_id=$5 AND (lat IS NULL OR lon IS NULL)`,
+              [coords.lat, coords.lon, coords.city || null, coords.region || null, req.user.id]
+            );
+            console.log('📍 profile geocoded →', coords);
+          }
+        } catch (e) {
+          console.warn('⚠️ geocode(profile) failed:', e.message);
+        }
+      }
+    }
+    res.sendStatus(200)
 
   } catch (err) {
     console.error('❌ error in PATCH /me/profile:', err);

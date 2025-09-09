@@ -4,6 +4,14 @@ const axios = require('axios');
 const OPENCAGE_KEY = (process.env.OPENCAGE_KEY || '').trim();
 const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 
+function pickCityLike(addr = {}) {
+  return addr.city || addr.town || addr.village || addr.hamlet || addr.municipality || null;
+}
+function pickRegionLike(addr = {}) {
+  // w PL zwykle 'state' = województwo
+  return addr.state || addr.region || addr.county || null;
+}
+
 async function geocodeWithOpenCage(q) {
   if (!OPENCAGE_KEY) return null;
   const url =
@@ -13,9 +21,16 @@ async function geocodeWithOpenCage(q) {
     + '&limit=1&no_annotations=1&language=pl&countrycode=pl';
   try {
     const r = await axios.get(url, { timeout: 8000 });
-    const g = r?.data?.results?.[0]?.geometry;
+    const res = r?.data?.results?.[0];
+    const g = res?.geometry;
     if (g && typeof g.lat === 'number' && typeof g.lng === 'number') {
-      return { lat: g.lat, lon: g.lng };
+      const c = res?.components || {};
+      return {
+        lat: g.lat,
+        lon: g.lng,
+        city:   pickCityLike(c),
+        region: pickRegionLike(c)
+      };
     }
   } catch (e) {}
   return null;
@@ -35,7 +50,14 @@ async function geocodeWithNominatim(q) {
     });
     const hit = Array.isArray(r.data) ? r.data[0] : null;
     if (hit && hit.lat && hit.lon) {
-      return { lat: parseFloat(hit.lat), lon: parseFloat(hit.lon) };
+           const a = hit.address || {};
+       return { 
+
+        lat: parseFloat(hit.lat),
+        lon: parseFloat(hit.lon),
+        city:   pickCityLike(a),
+        region: pickRegionLike(a)
+      };
     }
   } catch (e) {}
   return null;

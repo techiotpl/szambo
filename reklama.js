@@ -33,37 +33,37 @@ const ADS = {
   // MIASTA ───────────────────────────────────────────────────────────────────
   Szczecin: {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+515490145' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+515490145' }
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+999' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+8888' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+48911223344' }
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+777' }
     ]
   },
   Bydgoszcz: {
     A: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+54873009475' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+4444' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:5555' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+663229464' }
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+55555' }
     ]
   },
 
   // WOJEWÓDZTWA (fallback) ──────────────────────────────────────────────────
   'Kujawsko-Pomorskie': {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+515490145' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+515490145' }
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+111' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+2222' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: '515490145' }
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: '333' }
     ]
   },
   'Zachodniopomorskie': {
     A: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+1111' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+222222' }
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+11223344' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+55667788' }
     ],
     B: [
       { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '997' }
@@ -73,11 +73,11 @@ const ADS = {
   // DOMYŚLNY koszyk ─────────────────────────────────────────────────────────
   OTHER: {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+515490145' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+515490145' }
+      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+0000002' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:00001' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
+      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '000000' }
     ]
   }
 };

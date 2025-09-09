@@ -167,7 +167,7 @@ module.exports = function registerAdsRoute(app,db) {
 
     // 6) Doklej metadane
     const enriched = rawBanners.map((b, idx) => ({
-      id: `${bucketKey}-${group}-${idx}`,,
+      id: `${bucketKey}-${group}-${idx}`,
       img: b.img,
       href: b.href,
       city: city || null,

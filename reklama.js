@@ -195,8 +195,7 @@ async function geocodeAddress(addr) {
 async function pickCityRegionFromDevice(req, db) {
   // 1) Priorytet: ?serial=EUI (bez auth)
   const serial = String(req.query.serial || '').trim().toUpperCase();
-  if (/^[0-9A-F]{16}$/.test(serial) && db) {
-       if (/^[0-9A-F]{16}$/.test(serial)) {
+  if (/^[0-9A-F]{16}$/.test(serial)) {
     if (!db) {
       console.log('⚠️  [ADS] serial=%s podany, ale DB nie jest dostępne w reklama.js', serial);
       return null;

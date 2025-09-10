@@ -200,6 +200,7 @@ async function pickCityRegionFromDevice(req, db) {
     if (!db) {
       console.log('⚠️  [ADS] serial=%s podany, ale DB nie jest dostępne w reklama.js', serial);
       return null;
+    }
     try {
       console.log('🔎 [ADS] pick by serial=%s', serial);
       const { rows } = await db.query(

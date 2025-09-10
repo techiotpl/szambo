@@ -831,23 +831,23 @@ app.get('/device/:serial/measurements', auth, consentGuard, async (req, res) => 
 
 
 //////////////////////to zeby sprawdzic w htmlu historie pomiarów  ....
-app.get('/device/:serial/measurements', requireAdmin, async (req, res) => {
-  const serial = req.params.serial;
-  const limit  = Math.min(parseInt(req.query.limit || '50', 10), 240);
+// ADMIN: historia pomiarów (do 240)
+app.get('/admin/device/:serial/measurements', auth, adminOnly, async (req, res) => {
+  const { serial } = req.params;
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), 240);
 
-  // pobierz z DB – dostosuj do swojej warstwy (SQL/Mongo/Prisma itd.)
-  const rows = await db('measurements')
-    .where({ serial_number: serial })
-    .orderBy('ts', 'desc')
-    .limit(limit);
+  const { rows } = await db.query(
+    `SELECT ts, distance_cm, snr
+       FROM measurements
+      WHERE device_serial = $1
+      ORDER BY ts DESC
+      LIMIT $2`,
+    [serial, limit]
+  );
 
-  // opcjonalny mapping nazw pól
-  res.json(rows.map(r => ({
-    ts: r.ts,                      // ISO datetime
-    distance_cm: r.distance_cm,    // liczba
-    snr: r.snr ?? null             // opcjonalnie
-  })));
+  res.json(rows);
 });
+
 
 ///////////////////////////////////////////////tu koniec tego ? /////////////////
 

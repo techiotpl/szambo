@@ -52,7 +52,7 @@ const ADS = {
       { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+482' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+483' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/Instrukcja/Zrzut%20ekranu%202025-04-07%20111237.png', href: 'tel:+000000' }
     ],
   },
   Bydgoszcz: {

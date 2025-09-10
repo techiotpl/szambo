@@ -77,8 +77,7 @@ app.use(helmet());
 // zaufaj 1. wpisowi z X-Forwarded-For, żeby req.ip pokazywało prawdziwy adres
 app.set('trust proxy', 1);
 
-// ───────────────  REKLAMY (/ads)  ───────────────
-registerAdsRoute(app, db); // ← MUSI być przekazany pool/klient DB
+
 
 
 const PORT = process.env.PORT || 3000;
@@ -251,7 +250,9 @@ if (process.env.RUN_MIGRATION === 'true') {
     process.exit(1); // zachowujemy dotychczasową semantykę
   });
 }
-
+// ───────────────  REKLAMY (/ads)  ───────────────
+// <— dopiero teraz, gdy `db` już istnieje:
+registerAdsRoute(app, db);
 
 
 // ─────────────────────────────────────────────────────────────────────────────

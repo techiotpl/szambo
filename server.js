@@ -2674,58 +2674,22 @@ app.get('/admin/confirm-account', async (req, res) => {
                 </tr>
               </table>
 
-              <!-- Android label -->
-              <p style="margin:20px 0 10px 0; font-size:16px; color:#222; font-weight:bold;">Pobierz aplikację na Androida:</p>
+              <!-- Oficjalne przyciski pobierania -->
+              <div style="text-align:center; margin:28px 0 12px 0;">
+                <a href="https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol&utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding" target="_blank" style="display:inline-block; margin:6px;">
+                  <img src="https://tracktrace.azureedge.net/google-play.jpg" alt="Pobierz w Google Play" width="160" style="display:block; border:0; max-width:160px; height:auto;">
+                </a>
+                <a href="https://apple-szambo-control.techiot.pl/?utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding" target="_blank" style="display:inline-block; margin:6px;">
+                  <img src="https://tracktrace.azureedge.net/app-store.jpg" alt="Pobierz w App Store" width="160" style="display:block; border:0; max-width:160px; height:auto;">
+                </a>
+              </div>
 
-              <!-- ANDROID BUTTON (table-based, fixed width) -->
-              <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" class="btn-fixed" width="360" style="width:360px; margin:0 auto;">
-                <tr>
-                  <td align="center" style="padding:0;">
-                    <!--[if mso]>
-                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol&utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding"
-                      style="height:48px;v-text-anchor:middle;width:360px;" arcsize="8%" stroke="f" fillcolor="#1a73e8">
-                      <w:anchorlock/>
-                      <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;">Pobierz z Google Play</center>
-                    </v:roundrect>
-                    <![endif]-->
-                    <!--[if !mso]><!-- -->
-                    <a href="https://play.google.com/store/apps/details?id=pl.techiot.szambocontrol&utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding"
-                       style="background:#1a73e8; color:#ffffff; display:block; text-align:center; text-decoration:none; font-size:16px; line-height:16px; padding:16px 22px; border-radius:6px;">
-                       Pobierz z Google Play
-                    </a>
-                    <!--<![endif]-->
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Spacer -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr><td height="16" style="line-height:16px;font-size:16px;">&nbsp;</td></tr>
-              </table>
-
-              <!-- Apple label -->
-              <p style="margin:0 0 10px 0; font-size:16px; color:#222; font-weight:bold;">iPhone / iPad:</p>
-
-              <!-- APPLE BUTTON (table-based, same fixed width) -->
-              <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" class="btn-fixed" width="360" style="width:360px; margin:0 auto;">
-                <tr>
-                  <td align="center" style="padding:0;">
-                    <!--[if mso]>
-                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://apple-szambo-control.techiot.pl/?utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding"
-                      style="height:48px;v-text-anchor:middle;width:360px;" arcsize="8%" stroke="f" fillcolor="#111111">
-                      <w:anchorlock/>
-                      <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;">Jeśli używasz Apple () – kliknij tu</center>
-                    </v:roundrect>
-                    <![endif]-->
-                    <!--[if !mso]><!-- -->
-                    <a href="https://apple-szambo-control.techiot.pl/?utm_source=confirmation_email&utm_medium=email&utm_campaign=onboarding"
-                       style="background:#111111; color:#ffffff; display:block; text-align:center; text-decoration:none; font-size:16px; line-height:16px; padding:16px 22px; border-radius:6px;">
-                       Jeśli używasz Apple () – kliknij tu
-                    </a>
-                    <!--<![endif]-->
-                  </td>
-                </tr>
-              </table>
+              <!-- Prawne zastrzeżenia znaków towarowych -->
+              <p style="margin:14px 0 0 0; font-size:11px; color:#888; line-height:1.5; text-align:center;">
+                Google Play i logo Google Play są znakami towarowymi Google LLC.<br>
+                Apple oraz logo Apple są znakami towarowymi Apple Inc., zarejestrowanymi w USA i innych krajach.<br>
+                App Store jest znakiem usługowym Apple Inc.
+              </p>
 
               <!-- Fallback links -->
               <p style="margin:14px 0 0 0; font-size:13px; color:#777; line-height:1.6;">

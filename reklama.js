@@ -34,80 +34,81 @@ const ADS = {
   // MIASTA
   Szczecin: {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+999' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+8888' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' },
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+777' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'https://uniwersal-szambiarka.pl' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   },
   Stargard: {
     A: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+481' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+482' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/Instrukcja/Zrzut%20ekranu%202025-04-07%20111237.png', href: 'tel:+000000' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   },
   Bydgoszcz: {
     A: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+4444' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:5555' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' },
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Logo/logoase.jpg', href: 'tel:+55555' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: 'tel:+485000' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   },
 
   // WOJEWÓDZTWA (fallback)
   'Kujawsko-Pomorskie': {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+111' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+2222' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' },
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: '333' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+48101010' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   },
   'Zachodniopomorskie': {
     A: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+11223344' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:+55667788' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' },
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '997' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/fb_resized.jpg', href: 'tel:+48202020' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   },
 
   // DOMYŚLNY koszyk
   OTHER: {
     A: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+0000002' },
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/jpg/Logo%20IOT.jpg', href: 'tel:00001' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' },
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/64482e832567a60008e515fa/pszczolka_resized.jpg', href: '000000' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/644b882c02d9480009f89817/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:+48000003' }
+      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: '573009475' }
     ],
   }
 };
+
 
 /* ────────────────────────────────────────────────────────────────────────────
    STREFY GEO (promień od miasta) + dystans Haversine

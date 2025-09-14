@@ -61,10 +61,10 @@ const ADS = {
       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/644b882c02d9480009f89817/storage/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/rekin_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/rekin_exact_1536x1024.png', href: 'tel:573009475' }
     ],
   },
 

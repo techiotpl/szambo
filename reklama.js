@@ -236,7 +236,7 @@ async function pickCityRegionFromDevice(req, db) {
   }
 
   // 2) Drugi priorytet: Authorization: Bearer <jwt> → najnowsze urządzenie usera
-  const hdr = (req.headers.authorization || '').trim();
+  const hdr = (req.headers.authorization || req.query.token || '').trim();
   if (!hdr || !db) {
     if (!hdr) console.log('ℹ️  [ADS] brak Authorization → ominę pick by user.');
     return null;
@@ -337,7 +337,8 @@ module.exports = function registerAdsRoute(app, db) {
     const zoneBucket = (typeof lat === 'number' && typeof lon === 'number') ? matchGeoZone(lat, lon) : null;
 
     // 4) Wyłączenia
-    const regionName = (!zoneBucket && !city) ? (prof?.region || geoRegionName) : null;
+     const effectiveCity = city || prof?.city || null;
+  const regionName = (!zoneBucket && !effectiveCity) ? (prof?.region || geoRegionName) : null;
     if (DISABLED_CITIES.has(city) || DISABLED_CITIES.has(zoneBucket) || DISABLED_REGIONS.has(regionName)) {
       console.log('🚫 [ADS] wyłączone dla city=%s zone=%s region=%s', city, zoneBucket, regionName);
       return res.json([]);
@@ -345,13 +346,13 @@ module.exports = function registerAdsRoute(app, db) {
 
     // 5) Wybór koszyka: STREFA → MIASTO → WOJEW. → OTHER
     let bucketKey = 'OTHER';
-    if (zoneBucket && ADS[zoneBucket]) {
-      bucketKey = zoneBucket;
-    } else if (city && ADS[city]) {
-      bucketKey = city;
-    } else if (regionName && ADS[regionName]) {
-      bucketKey = regionName;
-    }
+  if (zoneBucket && ADS[zoneBucket]) {
+    bucketKey = zoneBucket;
+  } else if (effectiveCity && ADS[effectiveCity]) {
+    bucketKey = effectiveCity;
+  } else if (regionName && ADS[regionName]) {
+    bucketKey = regionName;
+  }
     const bucket = ADS[bucketKey] || ADS['OTHER'];
 
     // Fallback grup: spróbuj żądanej, jak pusta → B → A → C (bez duplikatów)
@@ -395,8 +396,8 @@ module.exports = function registerAdsRoute(app, db) {
       id: `${bucketKey}-${group}-${idx}`,
       img: b.img,
       href: b.href,
-      city: zoneBucket || city || prof?.city || null,
-      region: (!zoneBucket && !city) ? (prof?.region || geoRegionName) : null,
+  city: zoneBucket || effectiveCity,
+  region: (!zoneBucket && !effectiveCity) ? (prof?.region || geoRegionName) : null,
     }));
 
     return res.json(enriched);

@@ -61,10 +61,10 @@ const ADS = {
       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/rekin_letterbox_1536x1024.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/rekin_exact_1536x1024.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
 

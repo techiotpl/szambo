@@ -58,13 +58,13 @@ const ADS = {
   Bydgoszcz: {
     A: [
      
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/Logo_IOT_resized_to_szambiarka_czat2.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/logo_techiot.png', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
 

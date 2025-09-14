@@ -57,7 +57,7 @@ const ADS = {
   },
   Bydgoszcz: {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' },
+     
       { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
     ],
     B: [

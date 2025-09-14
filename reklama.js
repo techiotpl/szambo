@@ -34,25 +34,25 @@ const ADS = {
   // MIASTA
   Szczecin: {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' },
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
   Stargard: {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
   Bydgoszcz: {
@@ -61,7 +61,7 @@ const ADS = {
       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
+      { img: 'https://files.us-e1.tago.io/644b882c02d9480009f89817/storage/Zdjecia/JPG/Inne/szambiarka_czat2.png', href: 'tel:573009475' }
     ],
     C: [
       { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
@@ -71,40 +71,40 @@ const ADS = {
   // WOJEWÓDZTWA (fallback)
   'Kujawsko-Pomorskie': {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' },
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
   'Zachodniopomorskie': {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' },
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   },
 
   // DOMYŚLNY koszyk
   OTHER: {
     A: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' },
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' },
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     B: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
     C: [
-      { img: 'https://files.us-e1.tago.io/666338f30e99fc00097a38e6/storage/jpg/Logo%20IOT.jpg', href: 'tel:573009475' }
+      { img: 'https://api.tago.io/file/666338f30e99fc00097a38e6/ZDJECIA/JPG/techiot_banner_letterbox_1536x1024.png', href: 'tel:573009475' }
     ],
   }
 };

@@ -39,7 +39,7 @@ async function geocodeWithOpenCage(q) {
 async function geocodeWithNominatim(q) {
   const url =
     'https://nominatim.openstreetmap.org/search'
-    + `?format=jsonv2&limit=1&countrycodes=pl&q=${encodeURIComponent(q)}`;
+   + `?format=jsonv2&limit=1&addressdetails=1&countrycodes=pl&q=${encodeURIComponent(q)}`;
   try {
     const r = await axios.get(url, {
       timeout: 8000,

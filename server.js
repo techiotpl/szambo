@@ -90,7 +90,7 @@ app.use(bodyParser.json());
 
 // Nominatim – kontakt do nagłówka i parametru email (wymagane przez OSM)
 const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
-
+/**
  * Buduje rozsądne warianty zapytań do geokodera z „brudnego” pola street.
  * Obsługuje m.in.:
  *  - "Bydgoszcz ul. Elbląska 1"  → "Elbląska 1, Bydgoszcz, Polska" itd.

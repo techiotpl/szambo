@@ -91,7 +91,51 @@ app.use(bodyParser.json());
 // Nominatim – kontakt do nagłówka i parametru email (wymagane przez OSM)
 const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 
+ * Buduje rozsądne warianty zapytań do geokodera z „brudnego” pola street.
+ * Obsługuje m.in.:
+ *  - "Bydgoszcz ul. Elbląska 1"  → "Elbląska 1, Bydgoszcz, Polska" itd.
+ *  - "ul. Elbląska 1 Bydgoszcz"  → "Elbląska 1, Bydgoszcz, Polska" itd.
+ *  - przypadki z/bez przecinka
+ */
+function buildGeocodeVariants(raw) {
+  const s0 = String(raw || '').trim();
+  if (!s0) return [];
 
+  // ujednolicenie "ul." → "ul. " (jedno "ul.")
+  const fixUl = (t) => t.replace(/\bul\.?\s*/gi, 'ul. ');
+  // spacje po przecinkach
+  const s = fixUl(s0).replace(/\s*,\s*/g, ', ');
+
+  const variants = new Set();
+  const parts = s.split(',').map(v => v.trim());
+  const hasDigits = str => /\d/.test(str);
+
+  if (parts.length === 2) {
+    // klasycznie: "Ulica 1, Miasto" albo "Miasto, Ulica 1"
+    const [a, b] = parts;
+    if (!hasDigits(a) && hasDigits(b)) variants.add(`${fixUl(b)}, ${a}, Polska`); // "Miasto, Ulica" → "Ulica, Miasto"
+    if (hasDigits(a) && !hasDigits(b)) variants.add(`${fixUl(a)}, ${b}, Polska`); // "Ulica, Miasto" (OK)
+  } else {
+    // brak przecinka — spróbuj wykryć wzorce
+    const r1 = /^(.+?)\s+ul\.?\s*(.+)$/i;               // "Miasto ul. Elbląska 1"
+    const r2 = /^ul\.?\s*(.+?)\s+([A-ZŻŹĆĄŚĘŁÓŃ].+)$/i; // "ul. Elbląska 1 Bydgoszcz"
+    if (r1.test(s)) {
+      const [, city, streetPart] = s.match(r1);
+      variants.add(`${fixUl(streetPart)}, ${city}, Polska`);
+      variants.add(`${city}, ${fixUl(streetPart)}, Polska`);
+    } else if (r2.test(s)) {
+      const [, streetPart, city] = s.match(r2);
+      variants.add(`${fixUl(streetPart)}, ${city}, Polska`);
+      variants.add(`${city}, ${fixUl(streetPart)}, Polska`);
+    }
+  }
+
+  // zawsze: literal + "Polska", i wersja z prefiksem "ul." (jeśli brak)
+  variants.add(`${s}, Polska`);
+  if (!/^ul\./i.test(s)) variants.add(`ul. ${s}, Polska`);
+
+  return Array.from(variants);
+}
 
 async function geocodeAndUpdateDeviceBySerial(serial, { force = false } = {}) {
   try {
@@ -108,26 +152,8 @@ async function geocodeAndUpdateDeviceBySerial(serial, { force = false } = {}) {
     if (!street) return { ok: false, reason: 'no_street' };
     if (!force && lat != null && lon != null) return { ok: true, reason: 'already' };
 
-    // przygotuj warianty: "ulica nr, miasto" i "miasto, ulica nr"
-    const s = String(street).trim().replace(/\s*,\s*/g, ', ');
-    const parts = s.split(',').map(v => v.trim());
-    const hasDigits = str => /\d/.test(str);
-    const variants = new Set();
-    if (parts.length === 2) {
-      const [a, b] = parts;
-      if (!hasDigits(a) && hasDigits(b)) {
-        // wygląda na "Miasto, Ulica nr" → spróbuj "Ulica nr, Miasto"
-        variants.add(`${b}, ${a}, Polska`);
-      }
-      if (hasDigits(a) && !hasDigits(b)) {
-        // "Ulica nr, Miasto" (już ok)
-        variants.add(`${a}, ${b}, Polska`);
-      }
-    }
-    // zawsze spróbuj też literalnie podany ciąg + PL
-    variants.add(`${s}, Polska`);
-    // i wersję z prefiksem "ul."
-    variants.add(`ul. ${s}, Polska`);
+    // przygotuj warianty zapytań
+    const variants = new Set(buildGeocodeVariants(street));
 
     let coords = null;
     for (const q of variants) {
@@ -160,18 +186,9 @@ async function geocodeUserStreetAndUpdateSepticDevices(userId, streetRaw) {
   try {
     const s0 = String(streetRaw || '').trim();
     if (!s0) return { ok: false, reason: 'no_street' };
-    // lekkie normalizacje i warianty jak w device-geocode
-    const s = s0.replace(/\s*,\s*/g, ', ');
-    const parts = s.split(',').map(v => v.trim());
-    const hasDigits = str => /\d/.test(str);
-    const variants = new Set();
-    if (parts.length === 2) {
-      const [a, b] = parts;
-      if (!hasDigits(a) && hasDigits(b)) variants.add(`${b}, ${a}, Polska`);
-      if (hasDigits(a) && !hasDigits(b)) variants.add(`${a}, ${b}, Polska`);
-    }
-    variants.add(`${s}, Polska`);
-    variants.add(`ul. ${s}, Polska`);
+	  
+    // warianty jak w device-geocode (wspólny helper)
+    const variants = new Set(buildGeocodeVariants(s0));
 
     let coords = null;
     for (const q of variants) {
@@ -1104,7 +1121,20 @@ app.patch('/admin/device/:serial/params', auth, adminOnly, async (req, res) => {
     }
 
     await client.query('COMMIT');
+  
+
+    // ⬇️ jeżeli admin zmienił adres urządzenia → przelicz geolokację „od ręki”
+    try {
+      if (Object.prototype.hasOwnProperty.call(body, 'street')) {
+        geocodeAndUpdateDeviceBySerial(serial, { force: true }).catch(()=>{});
+      }
+    } catch (e) {
+      console.warn('[admin geo trigger] err:', e.message);
+    }
     return res.sendStatus(200);
+
+
+	  
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(`[PATCH /admin/device/${serial}/params] DB error:`, err);

@@ -1468,7 +1468,7 @@ app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
   const email = String(req.params.email || '').toLowerCase().trim();
   if (!email || !email.includes('@')) return res.status(400).send('invalid email param');
 
-  const allowed = new Set(['name','company','street','phone','is_active','customer_type','password']);
+  const allowed = new Set(['name','company','street','phone','is_active','customer_type','confirmed','password']);
   const cols = [];
   const vals = [];
   let i = 1;

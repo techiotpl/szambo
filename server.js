@@ -436,8 +436,10 @@ function adminOnly(req, res, next) {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/admin/users-with-devices', auth, adminOnly, async (req, res) => {
   const q = `
-    SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
-           u.customer_type AS customer_type,
+ SELECT u.id, u.email, u.name, u.sms_limit, u.abonament_expiry,
+        u.customer_type AS customer_type,
+        u.is_active,
+        u.confirmed,
            COALESCE(
              json_agg(d.*) FILTER (WHERE d.id IS NOT NULL),
              '[]'::json
@@ -1492,6 +1494,12 @@ app.patch('/admin/user/:email/params', auth, adminOnly, async (req, res) => {
       cols.push(`is_active = $${i++}`); vals.push(raw);
       continue;
     }
+
+	   if (k === 'confirmed') {
+   if (typeof raw !== 'boolean') return res.status(400).send('confirmed must be boolean');
+   cols.push(`confirmed = $${i++}`); vals.push(raw);
+   continue;
+ }
     if (k === 'customer_type') {
       const v = String(raw || '').trim().toLowerCase();
       if (!['client','firmowy'].includes(v)) return res.status(400).send('customer_type must be client|firmowy');

@@ -13,15 +13,7 @@
  *   DATABASE_URL
  *   SMSAPIKEY, SMSAPIPASSWORD
  *   SMTP_HOST, SMTP_PORT, SMTP_SECURE ('true'/'false'), SMTP_USER, SMTP_PASS, SMTP_FROM
-
-+ *  3) (NOWE) Za każdym uruchomieniem joba zmniejsza users.sms_limit o 1
-+ *     dla aktywnych abonamentów (abonament_expiry > dzisiaj), tylko gdy sms_limit > 0,
-+ *     i wypisuje logi "PRZED → PO".
-
- 
  */
-
-
 
 require('dotenv').config();
 const { Pool } = require('pg');
@@ -130,8 +122,10 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
     const { rows: affected } = await db.query(q);
     console.log(`✅ Zresetowano sms_limit=0 u ${affected.length} użytkowników`);
 
-// Nie wychodzimy z joba nawet, jeśli nikomu nie wygasło — poniżej mamy codzienne -1.
-    
+    if (affected.length === 0) {
+      return; // pool zamknie się w finally
+    }
+
     // (opcjonalnie) dla spójności, wyzeruj sms_limit także w devices powiązanych z tymi userami
     // — nie jest to używane produkcyjnie, ale pomaga uniknąć mylących odczytów w starych miejscach.
     await db.query(`
@@ -142,47 +136,30 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
         )
     `).catch(()=>{});
 
-    // 2) Powiadomienia per user (tylko gdy są "affected")
+    // 2) Powiadomienia per user
     const smsMsg = '⛔ Pakiet SMS wygasł. Aby nadal otrzymywać alerty, kup pakiet 30 SMS w aplikacji.';
-    if (affected.length > 0) {
-      for (const u of affected) {
-        const phone = normalisePhone(u.sms_phone);
-        if (phone) {
-          try { await sendSMS(phone, smsMsg, 'abonament_expired'); }
-          catch (e) { console.warn(`⚠️ SMS fail for ${u.user_id}/${phone}:`, e.message); }
-        } else {
-          console.log(`ℹ️  User ${u.user_id} nie ma telefonu – pomijam SMS`);
-        }
+    for (const u of affected) {
+      const phone = normalisePhone(u.sms_phone);
+      if (phone) {
+        try { await sendSMS(phone, smsMsg, 'abonament_expired'); }
+        catch (e) { console.warn(`⚠️ SMS fail for ${u.user_id}/${phone}:`, e.message); }
+      } else {
+        console.log(`ℹ️  User ${u.user_id} nie ma telefonu – pomijam SMS`);
+      }
 
-        // e-mail do usera + kopia do biura
-        if (u.user_email && transporter) {
-          const html = `
-            <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
-              <p>Twoj pakiet SMS wygasł (abonament do: ${new Date().toISOString().slice(0,10)} lub wcześniej).</p>
-              <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji TechioT (30 SMS / 50 zł).</p>
-              <p style="color:#777;font-size:12px">Jeżeli to pomyłka – prosimy o kontakt.</p>
-            </div>
-          `;
-          try { await sendEmail(transporter, u.user_email, '⛔ Pakiet SMS wygasł – TechioT', html, ['biuro@techiot.pl']); }
-          catch (e) { console.warn(`⚠️ E-mail fail for ${u.user_email}:`, e.message); }
-        }
+      // e-mail do usera + kopia do biura
+      if (u.user_email && transporter) {
+        const html = `
+          <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
+            <p>Twoj pakiet SMS wygasł (abonament do: ${new Date().toISOString().slice(0,10)} lub wcześniej).</p>
+            <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji TechioT (30 SMS / 50 zł).</p>
+            <p style="color:#777;font-size:12px">Jeżeli to pomyłka – prosimy o kontakt.</p>
+          </div>
+        `;
+        try { await sendEmail(transporter, u.user_email, '⛔ Pakiet SMS wygasł – TechioT', html, ['biuro@techiot.pl']); }
+        catch (e) { console.warn(`⚠️ E-mail fail for ${u.user_email}:`, e.message); }
       }
     }
-
-    // 3) (NOWE) Codzienny decrement "abonamentu" o 1 dla aktywnych kont (per-user sms_limit)
-    //    Warunek: abonament jeszcze trwa i sms_limit > 0 (nie schodzimy poniżej zera).
-    const { rows: dec } = await db.query(`
-      UPDATE users
-         SET sms_limit = sms_limit - 1
-       WHERE abonament_expiry > CURRENT_DATE
-         AND sms_limit > 0
-       RETURNING id, email, (sms_limit + 1) AS before, sms_limit AS after
-    `);
-    console.log(`🧮 Zdekrementowano sms_limit u ${dec.length} użytkowników`);
-    for (const r of dec) {
-      console.log(`   – ${r.email}: ${r.before} → ${r.after} (−1)`);
-    }
-
   } catch (err) {
     console.error('❌ Błąd w jobie decrement-abonament:', err);
   } finally {

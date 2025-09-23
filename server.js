@@ -875,7 +875,7 @@ app.get('/admin/device/:serial/measurements', auth, adminOnly, async (req, res) 
 app.get('/admin/firm/tree', auth, adminOnly, async (req, res) => {
   try {
     const { rows: firms } = await db.query(
-      `SELECT id, email, name, company
+      `SELECT id, email, name, company, street
          FROM users
         WHERE customer_type = 'firmowy'`
     );
@@ -913,7 +913,7 @@ app.get('/admin/firm/tree', auth, adminOnly, async (req, res) => {
         });
       }
       out.push({
-        firm: { email: f.email, name: f.name, company: f.company },
+        firm: { email: f.email, name: f.name, company: f.company, street: f.street },
         clients: clientsOut
       });
     }

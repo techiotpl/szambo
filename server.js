@@ -16,6 +16,8 @@ const { Pool }   = require('pg');
 const crypto     = require('crypto'); // do losowania nowego hasła
 const { geocodeAddress } = require('./geocode'); 
 const { logDeviceSummary } = require('./handlers/logi');  // ← logger „karty”
+const fs = require('fs');
+
 
 const handlers = {
   septic: require('./handlers/septic'),
@@ -30,6 +32,44 @@ const ADMIN_NOTIFY_EMAIL = (process.env.ADMIN_NOTIFY_EMAIL || 'biuro@techiot.pl'
 
 // ── Sekret do /uplink ───────────────────────────────────────────────
 const UPLINK_BEARER = (process.env.UPLINK_BEARER || '').trim();
+
+const BEARER_FILE = (process.env.BEARER_FILE || '').trim();
+let bearerConfig = null;
+
+function loadBearerConfig() {
+  if (!BEARER_FILE) return null;
+  try {
+    const txt = fs.readFileSync(BEARER_FILE, 'utf8');
+    const json = JSON.parse(txt);
+    if (!json || typeof json !== 'object') throw new Error('bad json');
+    return json;
+  } catch (e) {
+    console.warn('⚠️ Nie mogę wczytać BEARER_FILE:', e.message);
+    return null;
+  }
+}
+bearerConfig = loadBearerConfig();
+
+function hostFromReq(req) {
+  const h = (req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  return h.replace(/:\d+$/, ''); // bez portu
+}
+
+function isTokenAllowed(host, token) {
+  if (!token) return false;
+  // 1) wsteczna kompatybilność – stary pojedynczy bearer
+  if (UPLINK_BEARER && token === UPLINK_BEARER) return true;
+
+  // 2) nowa ścieżka – plik JSON z listą
+  const cfg = bearerConfig && bearerConfig.hosts;
+  if (!cfg) return false;
+
+  const list = Array.isArray(cfg[host]) ? cfg[host]
+              : Array.isArray(cfg['*']) ? cfg['*']
+              : [];
+  return list.includes(token);
+}
+
 
 require('dotenv').config();
 const helmet = require('helmet');
@@ -2219,27 +2259,29 @@ const originalStreet = (street ?? '').toString().trim().replace(/\s*,\s*/g, ', '
 //   1) "Authorization: Bearer <TOKEN>"
 //   2) "Authorization: <TOKEN>"        ← to możesz wpisać w ChirpStacku
 function ensureUplinkBearer(req, res, next) {
-  if (!UPLINK_BEARER) {
-    console.warn('⚠️ UPLINK_BEARER nie ustawiony – blokuję /uplink');
+  if (!UPLINK_BEARER && !bearerConfig) {
+    console.warn('⚠️ Brak UPLINK_BEARER i BEARER_FILE – /uplink zablokowane');
     return res.status(500).send('uplink bearer not configured');
   }
+
   const ip   = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
   const hdr  = (req.headers.authorization || '').trim();
   if (!hdr) {
     console.warn(`[UPLINK] missing Authorization header from ${ip}`);
     return res.status(401).send('Unauthorized');
   }
-  // wyjmij token (z prefiksem Bearer lub bez)
+
   let token = hdr;
-  if (/^Bearer\s+/i.test(hdr)) {
-    token = hdr.replace(/^Bearer\s+/i, '').trim();
-  }
-  if (token !== UPLINK_BEARER) {
-    console.warn(`[UPLINK] bad token from ${ip}`);
+  if (/^Bearer\s+/i.test(hdr)) token = hdr.replace(/^Bearer\s+/i, '').trim();
+
+  const host = hostFromReq(req);
+  if (!isTokenAllowed(host, token)) {
+    console.warn(`[UPLINK] bad token from ${ip} host=${host || '-'} `);
     return res.status(401).send('Unauthorized');
   }
   return next();
 }
+
 
 // ── /uplink (z Bearer + normalizacja EUI do UPPERCASE) ─────────────
 app.post('/uplink', ensureUplinkBearer, async (req, res) => {

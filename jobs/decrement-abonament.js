@@ -149,13 +149,34 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
 
       // e-mail do usera + kopia do biura
       if (u.user_email && transporter) {
-        const html = `
-          <div style="font-family:Arial,sans-serif;font-size:15px;color:#333">
-            <p>Twoj pakiet SMS wygasł (abonament do: ${new Date().toISOString().slice(0,10)} lub wcześniej).</p>
-            <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji TechioT (30 SMS / 50 zł).</p>
-            <p style="color:#777;font-size:12px">Jeżeli to pomyłka – prosimy o kontakt.</p>
-          </div>
-        `;
+const html = `
+  <div style="font-family:Arial,sans-serif;font-size:15px;color:#333;line-height:1.5">
+    <p>Twój pakiet SMS wygasł (abonament do: ${new Date().toISOString().slice(0,10)} lub wcześniej).</p>
+    <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji <b>TechioT</b> (30 SMS / 59 zł).</p>
+
+    <hr style="border:none;border-top:1px solid #ddd;margin:20px 0">
+
+    <p style="font-size:14px;color:#444">
+      🔔 <b>Nowość w ofercie TechioT:</b><br>
+      Zadbaj o pełne bezpieczeństwo swojego domu lub obiektu:
+    </p>
+    <ul style="margin:10px 0 15px 20px;padding:0;font-size:14px;color:#444">
+      <li>
+        <a href="https://www.techiot.pl/czujnik-czadu-lorawan" style="color:#007bff;text-decoration:none">
+          <b>Czujnik czadu LoRaWAN</b>
+        </a> – w razie wykrycia tlenku węgla <b>wysyła SMS i dzwoni</b>.
+      </li>
+      <li>
+        <a href="https://www.techiot.pl/czujniki-zalania-lorawan" style="color:#007bff;text-decoration:none">
+          <b>Czujnik zalania LoRaWAN</b>
+        </a> – poinformuje Cię o wycieku wody <b>SMS-em i połączeniem telefonicznym</b>.
+      </li>
+    </ul>
+    <p style="font-size:14px">Zamów dodatkowe czujniki już dziś i zwiększ ochronę – <a href="https://www.techiot.pl" style="color:#007bff;text-decoration:none">www.techiot.pl</a></p>
+
+    <p style="color:#777;font-size:12px;margin-top:25px">Jeżeli to pomyłka – prosimy o kontakt z naszym zespołem TechioT.</p>
+  </div>
+`;
         try { await sendEmail(transporter, u.user_email, '⛔ Pakiet SMS wygasł – TechioT', html, ['biuro@techiot.pl']); }
         catch (e) { console.warn(`⚠️ E-mail fail for ${u.user_email}:`, e.message); }
       }

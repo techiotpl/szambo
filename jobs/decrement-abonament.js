@@ -137,7 +137,7 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
     `).catch(()=>{});
 
     // 2) Powiadomienia per user
-    const smsMsg = '⛔ Pakiet SMS wygasł. Aby nadal otrzymywać alerty, kup pakiet 30 SMS w aplikacji.';
+    const smsMsg = '⛔ Pakiet SMS wygasł.Wykup nowy w Ustawieniach aplikacji,by dalej otrzymywać alerty.';
     for (const u of affected) {
       const phone = normalisePhone(u.sms_phone);
       if (phone) {
@@ -152,7 +152,7 @@ async function sendEmail(transporter, to, subject, html, ccList = []) {
 const html = `
   <div style="font-family:Arial,sans-serif;font-size:15px;color:#333;line-height:1.5">
     <p>Twój pakiet SMS wygasł (abonament do: ${new Date().toISOString().slice(0,10)} lub wcześniej).</p>
-    <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji <b>TechioT</b> (30 SMS / 59 zł).</p>
+    <p>Aby nadal otrzymywać powiadomienia SMS, wykup nowy pakiet w aplikacji <b>TechioT</b> – w sekcji <b>Ustawienia → Pakiet SMS</b>.</p>
 
     <hr style="border:none;border-top:1px solid #ddd;margin:20px 0">
 

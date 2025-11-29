@@ -1,20 +1,18 @@
+// geocode.js
+const axios = require('axios');
 
- b/geocode.js
+const OPENCAGE_KEY = (process.env.OPENCAGE_KEY || '').trim();
+const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
 
- const axios = require('axios');
- 
- const OPENCAGE_KEY = (process.env.OPENCAGE_KEY || '').trim();
- const NOMINATIM_CONTACT = (process.env.NOMINATIM_CONTACT || 'biuro@techiot.pl').trim();
- 
 // --- helpers ---
- function pickCityLike(addr = {}) {
-   return addr.city || addr.town || addr.village || addr.hamlet || addr.municipality || null;
- }
- function pickRegionLike(addr = {}) {
-   // w PL zwykle 'state' = województwo
-   return addr.state || addr.region || addr.county || null;
- }
- 
+function pickCityLike(addr = {}) {
+  return addr.city || addr.town || addr.village || addr.hamlet || addr.municipality || null;
+}
+function pickRegionLike(addr = {}) {
+  // w PL zwykle 'state' = województwo
+  return addr.state || addr.region || addr.county || null;
+}
+
 function stripDiacritics(s = '') {
   return s
     .replace(/ą/gi, m => (m === 'ą' ? 'a' : 'A'))
@@ -48,6 +46,7 @@ function parseCityStreet(input = '') {
   const s = normalizeSpaces(input);
   const parts = s.split(',').map(p => p.trim()).filter(Boolean);
   if (parts.length === 1) return null;
+
   let city = null, street = null;
   // Heurystyka 1: „Miasto, ul …”
   if (/^ul\b\.?/i.test(parts[1]) || /\d/.test(parts[1])) {
@@ -60,6 +59,7 @@ function parseCityStreet(input = '') {
     city = parts.slice(1).join(', ');
   }
   if (!city || !street) return null;
+
   return {
     city: city.trim(),
     streetLoose: street.trim(),
@@ -67,25 +67,57 @@ function parseCityStreet(input = '') {
   };
 }
 
- async function geocodeWithOpenCage(q) {
-   if (!OPENCAGE_KEY) return null;
-   const url =
-     'https://api.opencagedata.com/geocode/v1/json'
-     + `?key=${encodeURIComponent(OPENCAGE_KEY)}`
-     + `&q=${encodeURIComponent(q)}`
-     + '&limit=1&no_annotations=1&language=pl&countrycode=pl';
+// --- providers ---
+async function geocodeWithOpenCage(q) {
+  if (!OPENCAGE_KEY) return null;
+  const url =
+    'https://api.opencagedata.com/geocode/v1/json'
+    + `?key=${encodeURIComponent(OPENCAGE_KEY)}`
+    + `&q=${encodeURIComponent(q)}`
+    + '&limit=1&no_annotations=1&language=pl&countrycode=pl';
+  try {
+    const r = await axios.get(url, { timeout: 8000 });
+    const res = r?.data?.results?.[0];
+    const g = res?.geometry;
+    if (g && typeof g.lat === 'number' && typeof g.lng === 'number') {
+      const c = res?.components || {};
+      return {
+        lat: g.lat,
+        lon: g.lng,
+        city:   pickCityLike(c),
+        region: pickRegionLike(c),
+      };
+    }
+  } catch (_) {}
+  return null;
+}
 
-   return null;
- }
- 
- async function geocodeWithNominatim(q) {
-   const url =
-     'https://nominatim.openstreetmap.org/search'
-    + `?format=jsonv2&limit=1&addressdetails=1&countrycodes=pl&q=${encodeURIComponent(q)}`;
+async function geocodeWithNominatim(q) {
+  const url =
+    'https://nominatim.openstreetmap.org/search'
+   + `?format=jsonv2&limit=1&addressdetails=1&countrycodes=pl&q=${encodeURIComponent(q)}`;
+  try {
+    const r = await axios.get(url, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': `TechioT/1.0 (${NOMINATIM_CONTACT})`,
+        'Accept-Language': 'pl',
+      },
+    });
+    const hit = Array.isArray(r.data) ? r.data[0] : null;
+    if (hit && hit.lat && hit.lon) {
+      const a = hit.address || {};
+      return {
+        lat: parseFloat(hit.lat),
+        lon: parseFloat(hit.lon),
+        city:   pickCityLike(a),
+        region: pickRegionLike(a),
+      };
+    }
+  } catch (_) {}
+  return null;
+}
 
-   return null;
- }
- 
 // Nominatim structured (lepsza precyzja, gdy mamy street/city)
 async function geocodeWithNominatimStructured({ street, city }) {
   const params = new URLSearchParams({
@@ -119,26 +151,33 @@ async function geocodeWithNominatimStructured({ street, city }) {
   return null;
 }
 
- async function geocodeAddress(address) {
-
+// --- main ---
+async function geocodeAddress(address) {
   const raw = String(address || '').trim();
   if (raw.length < 3) return null;
-  const q = normalizeSpaces(raw);
+
+  // toleruj ; | / jako separatory – zamień na przecinki zanim wejdzie parser
+  const q = normalizeSpaces(raw.replace(/[;|/]+/g, ','));
+  console.log(`geo: start address="${q}"`);
 
   // 0) spróbuj zapytania strukturalnego (jeśli uda się sparsować)
   const parsed = parseCityStreet(q);
   if (parsed) {
-    // warianty dla street: z „ul.” oraz bez
+    // warianty dla street: z „ul.” oraz bez + wersje bez polskich znaków
     const streetNoPrefix = parsed.street.replace(/^ul\.\s*/i, '').trim();
     const structuredVariants = [
-      { street: parsed.street,         city: parsed.city },
-      { street: streetNoPrefix,        city: parsed.city },
-      { street: stripDiacritics(parsed.street),  city: stripDiacritics(parsed.city) },
-      { street: stripDiacritics(streetNoPrefix), city: stripDiacritics(parsed.city) }
+      { street: parsed.street,                      city: parsed.city },
+      { street: streetNoPrefix,                     city: parsed.city },
+      { street: stripDiacritics(parsed.street),     city: stripDiacritics(parsed.city) },
+      { street: stripDiacritics(streetNoPrefix),    city: stripDiacritics(parsed.city) },
     ];
     for (const v of structuredVariants) {
+      console.log(`geo: try structured street="${v.street}" city="${v.city}"`);
       const ns = await geocodeWithNominatimStructured(v);
-      if (ns) return ns;
+      if (ns) {
+        console.log(`geo: hit structured -> lat=${ns.lat} lon=${ns.lon}`);
+        return ns;
+      }
     }
   }
 
@@ -156,14 +195,26 @@ async function geocodeWithNominatimStructured({ street, city }) {
 
   // 2) OpenCage (jeśli mamy klucz) → 3) Nominatim free-text
   for (const v of variants) {
-    const oc = await geocodeWithOpenCage(v);
-    if (oc) return oc;
+    if (OPENCAGE_KEY) {
+      console.log(`geo: try OpenCage "${v}"`);
+      const oc = await geocodeWithOpenCage(v);
+      if (oc) {
+        console.log(`geo: hit OpenCage -> lat=${oc.lat} lon=${oc.lon}`);
+        return oc;
+      }
+    }
   }
   for (const v of variants) {
+    console.log(`geo: try Nominatim "${v}"`);
     const nm = await geocodeWithNominatim(v);
-    if (nm) return nm;
+    if (nm) {
+      console.log(`geo: hit Nominatim -> lat=${nm.lat} lon=${nm.lon}`);
+      return nm;
+    }
   }
+
+  console.log('geo: miss (no coordinates)');
   return null;
- }
- 
- module.exports = { geocodeAddress };
+}
+
+module.exports = { geocodeAddress };

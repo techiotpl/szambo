@@ -82,6 +82,14 @@ module.exports = async function updateOnLns(serie, name, street) {
         devicePayload.device.name = devName;
         devicePayload.device.description = description;
 
+        //dodajemy  29.11.2025
+                // 🔓 Wymuś włączenie urządzenia na LNS
+        // ChirpStack v4: isDisabled (bool). Niektóre API używają disabled.
+        // Dodajemy oba – nadmiarowe pola zostaną zignorowane po stronie LNS, a gdzie wspierane, włączą device.
+        devicePayload.device.isDisabled = false;
+        devicePayload.device.disabled = false;
+///koniec  tego  co  dodalem 29.11.2025
+        
         const putUrl = `${t.base}/api/devices/${devEUI}`;
         const putResp = await axios.put(putUrl, devicePayload, { headers, validateStatus: () => true });
 
@@ -111,6 +119,12 @@ module.exports = async function updateOnLns(serie, name, street) {
           devEUI: devEUI,
           name: devName,
           description,
+          //dodalem 29.11.2025
+          // 🔓 Domyślnie tworzymy urządzenie jako włączone
+          isDisabled: false,
+          disabled: false,
+        //koniec dodanego 29.11.2025
+          
           tags: {},
           variables: {},
         },

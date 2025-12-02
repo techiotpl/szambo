@@ -47,12 +47,19 @@ function formatPLN(grosze) {
   return `${zloty},${gr} zł`;
 }
 
+function calculateSHA384(data) {
+  const hash = crypto.createHash('sha384');
+  hash.update(data);
+  return hash.digest('hex');
+}
+
+// Bezpieczny helper do logowania skrótów kluczy
+function shortHash(value) {
+  if (!value) return null;
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 8);
+}
+
 module.exports = (app, db, auth) => {
-  function calculateSHA384(data) {
-    const hash = crypto.createHash('sha384');
-    hash.update(data);
-    return hash.digest('hex');
-  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /sms/orders  (STARY TRYB – JEDNO urządzenie)
@@ -81,33 +88,46 @@ module.exports = (app, db, auth) => {
       const currency     = 'PLN';
       const sessionId    = `SMS_${device.id}_${Date.now()}`;
 
-            // LOG: pojedyncze urządzenie
-      console.log(`[P24 register:/sms/orders] user=${req.user.email} device_serial=${serial} name="${device.name}" amount=${formatPLN(amountGrosze)}`);
+      // LOG: pojedyncze urządzenie
+      console.log(
+        `[P24 register:/sms/orders] user=${req.user.email} device_serial=${serial} ` +
+        `name="${device.name}" amount=${formatPLN(amountGrosze)}`
+      );
 
       const posId      = process.env.P24_POS_ID?.trim();
       const apiKey     = process.env.P24_API_KEY?.trim();
       const crcKey     = process.env.P24_CRC_KEY?.trim();
       const merchantId = process.env.P24_MERCHANT_ID?.trim();
       const useSandbox = (process.env.P24_SANDBOX || '').trim() === 'true';
-      // krótki, bezpieczny debug do logów:
-      console.log('[P24 cfg]', {
+
+      // LOG: konfiguracja bez ujawniania kluczy
+      console.log('[P24 cfg:/sms/orders]', {
         sandbox: useSandbox,
         baseUrl: useSandbox ? 'sandbox' : 'secure',
         posId,
         merchantId,
-        apiKey_sha256_8: apiKey ? require('crypto').createHash('sha256').update(apiKey).digest('hex').slice(0,8) : null,
+        apiKey_sha256_8: shortHash(apiKey),
+        crc_sha256_8: shortHash(crcKey),
       });
+
       if (!posId || !apiKey || !crcKey || !merchantId) {
+        console.error('[P24 cfg:/sms/orders] Brakuje którejś ze zmiennych P24_*');
         return res.status(500).json({ error: 'Brakuje zmiennych środowiskowych P24_*' });
       }
 
-      const sign = calculateSHA384(JSON.stringify({
+      const signPayload = {
         sessionId,
         merchantId: Number(merchantId),
         amount: amountGrosze,
         currency,
         crc: crcKey
-      }));
+      };
+      const sign = calculateSHA384(JSON.stringify(signPayload));
+
+      console.log('[P24 sign:/sms/orders]', {
+        payload: signPayload,
+        sign
+      });
 
       const orderData = {
         merchantId: Number(merchantId),
@@ -137,6 +157,8 @@ module.exports = (app, db, auth) => {
       });
 
       const response = await client.post('/transaction/register', orderData);
+      console.log('[P24 /transaction/register:/sms/orders] status=', response.status, 'data=', response.data);
+
       const tokenP24 = response.data.data.token;
       const redirectUrl = useSandbox
         ? `https://sandbox.przelewy24.pl/trnRequest/${tokenP24}`
@@ -144,7 +166,18 @@ module.exports = (app, db, auth) => {
 
       return res.json({ redirectUrl });
     } catch (err) {
-      console.error('❌ [POST /sms/orders] Błąd:', err);
+      if (err.response) {
+        console.error('❌ [POST /sms/orders] P24 error:', {
+          status: err.response.status,
+          data: err.response.data
+        });
+        if (err.response.status === 401) {
+          console.error('❌ [P24 401:/sms/orders] Incorrect authentication. Sprawdź POS_ID/API_KEY oraz sandbox vs secure.');
+          return res.status(502).json({ error: 'Błąd autoryzacji u operatora płatności (P24). Skontaktuj się z supportem.' });
+        }
+      } else {
+        console.error('❌ [POST /sms/orders] Błąd bez response:', err);
+      }
       return res.status(500).json({ error: 'sms/orders failed' });
     }
   });
@@ -186,7 +219,7 @@ module.exports = (app, db, auth) => {
       const currency  = 'PLN';
       const sessionId = `SMS_USER_${userId}_${Date.now()}`;
 
-           // LOG: zamówienie „na konto”
+      // LOG: zamówienie „na konto”
       console.log(
         `[P24 register:/sms/orders/for-user] user=${req.user.email} ` +
         `counts={septic:${counts.septic}, leak:${counts.leak}, co:${counts.co}} ` +
@@ -198,19 +231,36 @@ module.exports = (app, db, auth) => {
       const crcKey     = process.env.P24_CRC_KEY?.trim();
       const merchantId = process.env.P24_MERCHANT_ID?.trim();
       const useSandbox = (process.env.P24_SANDBOX || '').trim() === 'true';
+
+      console.log('[P24 cfg:/sms/orders/for-user]', {
+        sandbox: useSandbox,
+        baseUrl: useSandbox ? 'sandbox' : 'secure',
+        posId,
+        merchantId,
+        apiKey_sha256_8: shortHash(apiKey),
+        crc_sha256_8: shortHash(crcKey),
+      });
+
       if (!posId || !apiKey || !crcKey || !merchantId) {
+        console.error('[P24 cfg:/sms/orders/for-user] Brakuje którejś ze zmiennych P24_*');
         return res.status(500).json({ error: 'Brakuje zmiennych środowiskowych P24_*' });
       }
 
       const desc = `Abonament – ${counts.septic}× septic, ${counts.leak}× leak, ${counts.co}× CO (${formatPLN(amountGrosze)})`;
 
-      const sign = calculateSHA384(JSON.stringify({
+      const signPayload = {
         sessionId,
         merchantId: Number(merchantId),
         amount: amountGrosze,
         currency,
         crc: crcKey
-      }));
+      };
+      const sign = calculateSHA384(JSON.stringify(signPayload));
+
+      console.log('[P24 sign:/sms/orders/for-user]', {
+        payload: signPayload,
+        sign
+      });
 
       const orderData = {
         merchantId: Number(merchantId),
@@ -240,6 +290,8 @@ module.exports = (app, db, auth) => {
       });
 
       const response = await client.post('/transaction/register', orderData);
+      console.log('[P24 /transaction/register:/sms/orders/for-user] status=', response.status, 'data=', response.data);
+
       const tokenP24 = response.data.data.token;
       const redirectUrl = useSandbox
         ? `https://sandbox.przelewy24.pl/trnRequest/${tokenP24}`
@@ -247,11 +299,18 @@ module.exports = (app, db, auth) => {
 
       return res.json({ redirectUrl });
     } catch (err) {
-      if (err.response?.status === 401) {
-        console.error('❌ [P24 401] Incorrect authentication. Sprawdź POS_ID/API_KEY oraz sandbox vs secure.', err.response?.data);
-        return res.status(502).json({ error: 'Błąd autoryzacji u operatora płatności (P24). Skontaktuj się z supportem.' });
+      if (err.response) {
+        console.error('❌ [POST /sms/orders/for-user] P24 error:', {
+          status: err.response.status,
+          data: err.response.data
+        });
+        if (err.response.status === 401) {
+          console.error('❌ [P24 401:/sms/orders/for-user] Incorrect authentication. Sprawdź POS_ID/API_KEY oraz sandbox vs secure.');
+          return res.status(502).json({ error: 'Błąd autoryzacji u operatora płatności (P24). Skontaktuj się z supportem.' });
+        }
+      } else {
+        console.error('❌ [POST /sms/orders/for-user] Błąd bez response:', err);
       }
-      console.error('❌ [POST /sms/orders/for-user] Błąd:', err);
       return res.status(500).json({ error: 'sms/orders/for-user failed' });
     }
   });
@@ -267,10 +326,13 @@ module.exports = (app, db, auth) => {
         currency, orderId, methodId, statement, sign
       } = req.body;
 
+      console.log('[P24 verify] RAW body from P24:', req.body);
+
       if (
         !merchantId || !posId || !sessionId || !amount || !originAmount ||
         !currency || !orderId || !methodId || !statement || !sign
       ) {
+        console.error('[P24 verify] Brak któregoś z parametrów w notify');
         return res.status(400).send('Brak parametrów');
       }
 
@@ -281,7 +343,25 @@ module.exports = (app, db, auth) => {
       const useSandbox    = (process.env.P24_SANDBOX || '').trim() === 'true';
 
       if (!merchantIdEnv || !posIdEnv || !apiKeyEnv || !crcKey) {
+        console.error('[P24 verify] Brak którejś ze zmiennych P24_* w ENV');
         return res.status(500).send('Błąd konfiguracji');
+      }
+
+      console.log('[P24 verify cfg]', {
+        sandbox: useSandbox,
+        merchantId_from_req: merchantId,
+        posId_from_req: posId,
+        merchantId_env: merchantIdEnv,
+        posId_env: posIdEnv,
+        apiKey_sha256_8: shortHash(apiKeyEnv),
+        crc_sha256_8: shortHash(crcKey),
+      });
+
+      if (String(merchantId) !== String(merchantIdEnv)) {
+        console.warn('[P24 verify] MISMATCH merchantId: req=', merchantId, 'env=', merchantIdEnv);
+      }
+      if (String(posId) !== String(posIdEnv)) {
+        console.warn('[P24 verify] MISMATCH posId: req=', posId, 'env=', posIdEnv);
       }
 
       // 1) Sprawdzenie podpisu notyfikacji
@@ -297,8 +377,20 @@ module.exports = (app, db, auth) => {
         statement,
         crc:          crcKey
       };
+
+      console.log('[P24 verify] notificationPayload used for sign:', notificationPayload);
+
       const computedSign = calculateSHA384(JSON.stringify(notificationPayload));
-      if (computedSign !== sign) return res.status(400).send('Nieprawidłowy podpis');
+
+      console.log('[P24 verify] computedSign vs incoming sign:', {
+        computedSign,
+        incomingSign: sign
+      });
+
+      if (computedSign !== sign) {
+        console.error('[P24 verify] BAD SIGN – nieprawidłowy podpis (prawdopodobnie CRC/payload)');
+        return res.status(400).send('Nieprawidłowy podpis');
+      }
 
       // 2) Verify (PUT)
       const baseUrl = useSandbox
@@ -311,7 +403,7 @@ module.exports = (app, db, auth) => {
         headers: { 'Content-Type': 'application/json' }
       });
 
-      const verifyResp = await clientVerify.put('/transaction/verify', {
+      const verifyPayload = {
         merchantId: Number(merchantIdEnv),
         posId:      Number(posIdEnv),
         sessionId,
@@ -325,10 +417,20 @@ module.exports = (app, db, auth) => {
           currency,
           crc:     crcKey
         }))
+      };
+
+      console.log('[P24 verify PUT] payload:', verifyPayload);
+
+      const verifyResp = await clientVerify.put('/transaction/verify', verifyPayload);
+
+      console.log('[P24 verify PUT] response:', {
+        status: verifyResp.status,
+        data: verifyResp.data
       });
 
       const ok = verifyResp.data?.data?.status;
       if (!(ok === true || ok === 'TRUE' || ok === 'success')) {
+        console.error('[P24 verify] Transakcja niepotwierdzona, status=', ok);
         return res.status(400).send('Transakcja niepotwierdzona');
       }
 
@@ -361,11 +463,17 @@ module.exports = (app, db, auth) => {
              FROM users u
             WHERE d.user_id = u.id AND u.id = $1::uuid`,
           [userId]
-        ).catch(()=>{});
+        ).catch(() => {});
 
         // LOG
-        const { rows:[u] } = await db.query(`SELECT email, sms_limit, abonament_expiry FROM users WHERE id=$1::uuid`, [userId]);
-        console.log(`[P24 verify:USER] ok user=${u?.email||userId} +${SMS_TOPUP_PER_ORDER} SMS, expiry→ ${u?.abonament_expiry}`);
+        const { rows:[u] } = await db.query(
+          `SELECT email, sms_limit, abonament_expiry FROM users WHERE id=$1::uuid`,
+          [userId]
+        );
+        console.log(
+          `[P24 verify:USER] ok user=${u?.email || userId} +${SMS_TOPUP_PER_ORDER} SMS, ` +
+          `expiry→ ${u?.abonament_expiry}`
+        );
 
         return res.send(`
           <html><body style="font-family:sans-serif; text-align:center; margin-top:50px;">
@@ -386,6 +494,7 @@ module.exports = (app, db, auth) => {
             WHERE id = $1::uuid`,
           [deviceId]
         );
+        console.log(`[P24 verify:DEVICE] ok device_id=${deviceId} sms_limit=30 +365 dni`);
         return res.send(`
           <html><body style="font-family:sans-serif; text-align:center; margin-top:50px;">
             <h2>Płatność zakończona pomyślnie 😊</h2>
@@ -395,6 +504,7 @@ module.exports = (app, db, auth) => {
         `);
       }
 
+      console.error('[P24 verify] Nieprawidłowy sessionId:', sessionId);
       return res.status(400).send('Nieprawidłowy sessionId');
     } catch (err) {
       console.error('❌ [POST /sms/verify] Błąd:', err);

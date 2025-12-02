@@ -89,6 +89,14 @@ module.exports = (app, db, auth) => {
       const crcKey     = process.env.P24_CRC_KEY?.trim();
       const merchantId = process.env.P24_MERCHANT_ID?.trim();
       const useSandbox = (process.env.P24_SANDBOX || '').trim() === 'true';
+      // krótki, bezpieczny debug do logów:
+      console.log('[P24 cfg]', {
+        sandbox: useSandbox,
+        baseUrl: useSandbox ? 'sandbox' : 'secure',
+        posId,
+        merchantId,
+        apiKey_sha256_8: apiKey ? require('crypto').createHash('sha256').update(apiKey).digest('hex').slice(0,8) : null,
+      });
       if (!posId || !apiKey || !crcKey || !merchantId) {
         return res.status(500).json({ error: 'Brakuje zmiennych środowiskowych P24_*' });
       }
@@ -239,6 +247,10 @@ module.exports = (app, db, auth) => {
 
       return res.json({ redirectUrl });
     } catch (err) {
+      if (err.response?.status === 401) {
+        console.error('❌ [P24 401] Incorrect authentication. Sprawdź POS_ID/API_KEY oraz sandbox vs secure.', err.response?.data);
+        return res.status(502).json({ error: 'Błąd autoryzacji u operatora płatności (P24). Skontaktuj się z supportem.' });
+      }
       console.error('❌ [POST /sms/orders/for-user] Błąd:', err);
       return res.status(500).json({ error: 'sms/orders/for-user failed' });
     }

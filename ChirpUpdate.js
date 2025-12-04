@@ -9,6 +9,13 @@ const TARGETS = [
     profileId: '8a862a36-3aba-4c14-9a47-a41a5e33684e',
     tokenEnv: 'HELIUMBEARER',
   },
+    {
+    name: 'lns.techiot.pl',
+    base: 'http://16.170.194.35:8090',
+    appId: 'e400ccbd-ab70-4f8b-893b-3b4d4381f806',
+    profileId: '7258a97f-5dde-4686-a63e-299bb52c24bf',
+    tokenEnv: 'LNSBEARER',
+  },
   {
     name: 'Oracle',
     base: 'http://141.145.220.65:8090',

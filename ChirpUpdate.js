@@ -204,8 +204,11 @@ async function getDeviceDescription(serie) {
             // nie-2xx – loguj krótko body (bez spamowania)
       const msg = getResp?.data?.message || getResp?.data?.error || '';
       dlog(`target=${t.name} non2xx status=${getResp.status} msg="${String(msg).slice(0, 80)}"`);
-    } catch (_) {}
-     dlog(`target=${t.name} ERROR: ${e?.message || e}`);
+      continue; // próbuj następny LNS
+    } catch (e) {
+      dlog(`target=${t.name} ERROR: ${e?.message || e}`);
+      continue; // próbuj następny LNS
+    }
   }
 
   return { ok: false, target: 'none', status: 404, description: '' };

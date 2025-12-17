@@ -1737,8 +1737,7 @@ app.get('/me/devices/:id/support-contact', auth, consentGuard, async (req, res) 
       return res.status(404).send('DEVICE_NOT_FOUND');
     }
 
-    const eui = String(rows[0].eui || serial || '').toUpperCase();
-    const info = await chirpUpdate.getDeviceDescription(eui);
+
 
 	      const eui = String(rows[0].eui || serial || '').toUpperCase();
     console.log(`[support-contact] fetch desc eui=${eui} (raw="${raw}")`);

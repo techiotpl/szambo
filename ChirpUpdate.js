@@ -173,9 +173,18 @@ async function getDeviceDescription(serie) {
     return { ok: false, target: 'local', status: 0, description: '' };
   }
 
+  const DBG = String(process.env.SUPPORT_CONTACT_DEBUG || '').toLowerCase() === 'true';
+  const dlog = (...a) => { if (DBG) console.log('[getDeviceDescription]', ...a); };
+
+
+
+  
   for (const t of TARGETS) {
     const token = (process.env[t.tokenEnv] || '').trim();
-    if (!token) continue;
+        if (!token) {
+      dlog(`skip target=${t.name} reason=no_token env=${t.tokenEnv}`);
+      continue;
+    }
 
     const headers = {
       Accept: 'application/json',
@@ -185,12 +194,18 @@ async function getDeviceDescription(serie) {
 
     try {
       const getResp = await getDevice(t, devEUI, headers);
+      dlog(`target=${t.name} GET /api/devices/${devEUI} status=${getResp.status}`);
       if (String(getResp.status).startsWith('2') && getResp.data) {
         const devObj = getResp.data.device || getResp.data;
         const desc = (devObj && devObj.description != null) ? String(devObj.description).trim() : '';
+        dlog(`target=${t.name} ok descLen=${desc.length} desc="${desc.slice(0, 40)}"`);
         return { ok: true, target: t.name, status: getResp.status, description: desc };
       }
+            // nie-2xx – loguj krótko body (bez spamowania)
+      const msg = getResp?.data?.message || getResp?.data?.error || '';
+      dlog(`target=${t.name} non2xx status=${getResp.status} msg="${String(msg).slice(0, 80)}"`);
     } catch (_) {}
+     dlog(`target=${t.name} ERROR: ${e?.message || e}`);
   }
 
   return { ok: false, target: 'none', status: 404, description: '' };

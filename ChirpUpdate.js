@@ -51,7 +51,7 @@ async function getDevice(t, devEUI, headers) {
  *  - jeśli device istnieje → PUT z tym samym applicationId/deviceProfileId (skopiowanymi z GET)
  *  - jeśli nie istnieje (404/len err) → POST (z appId/profileId z TARGETS)
  */
-module.exports = async function updateOnLns(serie, name, street) {
+async function updateOnLns(serie, name, description) {
   const results = [];
   const devEUI = normalizeDevEui(serie);
   if (devEUI.length !== 16) {
@@ -69,8 +69,11 @@ module.exports = async function updateOnLns(serie, name, street) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     };
-    const devName = (name && name.trim()) ? name.trim() : devEUI;
-    const description = street || '';
+    const devName = (name && String(name).trim()) ? String(name).trim() : devEUI;
+    // Jeśli description == null/'' → NIE nadpisujemy istniejącego opisu w LNS
+    const desc = (description != null && String(description).trim() !== '') ? String(description).trim() : null;
+ 
+  
 
     try {
       // 1) Spróbuj odczytać aktualną definicję, żeby NIE zmieniać profilu
@@ -79,6 +82,7 @@ module.exports = async function updateOnLns(serie, name, street) {
       // a) ISTNIEJE → PUT z tymi samymi ID (tylko name/description)
       if (String(getResp.status).startsWith('2') && getResp.data) {
         const devObj = getResp.data.device || getResp.data;
+        const foundDescription = (devObj && devObj.description != null) ? String(devObj.description) : '';
         const { appKey, profKey, devEuiKey } = pickIdFieldNames(devObj);
 
         // składamy payload tak, aby skopiować identyfikatory dokładnie w tej samej konwencji
@@ -87,7 +91,7 @@ module.exports = async function updateOnLns(serie, name, street) {
         if (appKey && devObj[appKey])  devicePayload.device[appKey]  = devObj[appKey];
         if (profKey && devObj[profKey]) devicePayload.device[profKey] = devObj[profKey];
         devicePayload.device.name = devName;
-        devicePayload.device.description = description;
+        if (desc !== null) devicePayload.device.description = desc;
 
         //dodajemy  29.11.2025
                 // 🔓 Wymuś włączenie urządzenia na LNS
@@ -105,6 +109,7 @@ module.exports = async function updateOnLns(serie, name, street) {
           ok,
           target: t.name,
           status: putResp.status,
+          foundDescription,
           error: ok ? undefined : (putResp.data?.message || putResp.data?.error || `HTTP ${putResp.status}`),
         });
         continue;
@@ -125,7 +130,7 @@ module.exports = async function updateOnLns(serie, name, street) {
           deviceProfileID: profSimple,
           devEUI: devEUI,
           name: devName,
-          description,
+          ...(desc !== null ? { description: desc } : {}),
           //dodalem 29.11.2025
           // 🔓 Domyślnie tworzymy urządzenie jako włączone
           isDisabled: false,
@@ -146,6 +151,7 @@ module.exports = async function updateOnLns(serie, name, street) {
         ok,
         target: t.name,
         status: postResp.status,
+        foundDescription: desc || '' ,
         error: ok ? undefined : (msg || `HTTP ${postResp.status}`),
       });
     } catch (err) {
@@ -159,4 +165,36 @@ module.exports = async function updateOnLns(serie, name, street) {
   }
 
   return results;
-};
+  }
+// ⬇️ Nowa funkcja: TYLKO odczyt description z któregoś ChirpStacka (TARGETS)
+async function getDeviceDescription(serie) {
+  const devEUI = normalizeDevEui(serie);
+  if (devEUI.length !== 16) {
+    return { ok: false, target: 'local', status: 0, description: '' };
+  }
+
+  for (const t of TARGETS) {
+    const token = (process.env[t.tokenEnv] || '').trim();
+    if (!token) continue;
+
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
+
+    try {
+      const getResp = await getDevice(t, devEUI, headers);
+      if (String(getResp.status).startsWith('2') && getResp.data) {
+        const devObj = getResp.data.device || getResp.data;
+        const desc = (devObj && devObj.description != null) ? String(devObj.description).trim() : '';
+        return { ok: true, target: t.name, status: getResp.status, description: desc };
+      }
+    } catch (_) {}
+  }
+
+  return { ok: false, target: 'none', status: 404, description: '' };
+}
+
+module.exports = updateOnLns;
+module.exports.getDeviceDescription = getDeviceDescription;

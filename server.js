@@ -1740,6 +1740,17 @@ app.get('/me/devices/:id/support-contact', auth, consentGuard, async (req, res) 
     const eui = String(rows[0].eui || serial || '').toUpperCase();
     const info = await chirpUpdate.getDeviceDescription(eui);
 
+	      const eui = String(rows[0].eui || serial || '').toUpperCase();
+    console.log(`[support-contact] fetch desc eui=${eui} (raw="${raw}")`);
+
+    const t0 = Date.now();
+    const info = await chirpUpdate.getDeviceDescription(eui);
+    const ms = Date.now() - t0;
+    const desc = (info && info.description != null) ? String(info.description) : '';
+    console.log(
+      `[support-contact] desc result ok=${!!info?.ok} target=${info?.target} status=${info?.status} ms=${ms} descLen=${desc.trim().length} desc="${desc.trim().slice(0, 40)}"`
+    );
+
     if (info.ok && info.description && info.description.trim() !== '') {
       return res.json({ type: 'phone', value: info.description.trim() });
     }

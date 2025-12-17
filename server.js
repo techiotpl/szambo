@@ -1703,6 +1703,43 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
   res.json(mapped);
 });
 
+// GET /me/devices/:id/support-contact
+// - znajduje urządzenie usera
+// - czyta description z któregoś ChirpStacka (TARGETS w ChirpUpdate.js)
+// - jeśli description niepuste -> traktujemy jako numer telefonu
+// - jeśli puste / błąd -> fallback na kontakt@techiot.pl
+app.get('/me/devices/:id/support-contact', auth, consentGuard, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).send('BAD_DEVICE_ID');
+    }
+
+    const { rows } = await db.query(
+      'SELECT eui FROM devices WHERE id=$1 AND user_id=$2 LIMIT 1',
+      [id, req.user.id]
+    );
+    if (!rows.length) {
+      return res.status(404).send('DEVICE_NOT_FOUND');
+    }
+
+    const eui = String(rows[0].eui || '').toUpperCase();
+    const info = await chirpUpdate.getDeviceDescription(eui);
+
+    if (info.ok && info.description && info.description.trim() !== '') {
+      return res.json({ type: 'phone', value: info.description.trim() });
+    }
+
+    return res.json({ type: 'email', value: 'kontakt@techiot.pl' });
+  } catch (err) {
+    console.error('GET /me/devices/:id/support-contact error:', err);
+    return res.json({ type: 'email', value: 'kontakt@techiot.pl' });
+  }
+});
+
+
+
+
 // GET /firm/clients — lista klientów i ich urządzeń dla zalogowanego "firmowy"
 app.get('/firm/clients', auth, consentGuard, async (req, res) => {
   try {
@@ -1780,7 +1817,8 @@ app.post('/me/devices/claim', auth, consentGuard, async (req, res) => {
 
     // 2) Sprawdzenie w LNS (jak w /admin/create-device-with-user)
     const label = device_name || req.user.email || serialNorm;
-    const lnsResults = await chirpUpdate(serialNorm, label, street);
+        // NIE nadpisujemy description w LNS (tam jest numer telefonu)
+    const lnsResults = await chirpUpdate(serialNorm, label, null);
     const anyOk = Array.isArray(lnsResults) && lnsResults.some(r => r && r.ok);
     if (!anyOk) {
       return res
@@ -2123,7 +2161,8 @@ const originalStreet = (street ?? '').toString().trim().replace(/\s*,\s*/g, ', '
       }
 
       // 4) zaktualizuj opisy w LNS (ChirpStack itp.)
-      const lnsResults = await chirpUpdate(serial, devName || userName || serial, street);
+            // NIE nadpisujemy description w LNS (tam jest numer telefonu)
+      const lnsResults = await chirpUpdate(serial, devName || userName || serial, null);
       console.log('✅ LNS results:', JSON.stringify(lnsResults));
       const anyOk = Array.isArray(lnsResults) && lnsResults.some(r => r && r.ok);
       if (!anyOk) {

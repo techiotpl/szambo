@@ -1710,20 +1710,34 @@ app.get(['/me/devices','/me/devices/'], auth, consentGuard, async (req, res) => 
 // - jeśli puste / błąd -> fallback na kontakt@techiot.pl
 app.get('/me/devices/:id/support-contact', auth, consentGuard, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
+        const raw = String(req.params.id || '').trim();
+    const serial = raw.replace(/[^0-9a-f]/gi, '').toUpperCase();
+    const isSerial = /^[0-9A-F]{16}$/.test(serial);
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
+
+    let rows = [];
+    if (isSerial) {
+      console.log(`[support-contact] by SERIAL serial=${serial} user=${req.user.email}`);
+      ({ rows } = await db.query(
+        'SELECT eui FROM devices WHERE serial_number=$1 AND user_id=$2 LIMIT 1',
+        [serial, req.user.id]
+      ));
+    } else if (isUuid) {
+      console.log(`[support-contact] by UUID id=${raw} user=${req.user.email}`);
+      ({ rows } = await db.query(
+        'SELECT eui FROM devices WHERE id=$1::uuid AND user_id=$2 LIMIT 1',
+        [raw, req.user.id]
+      ));
+    } else {
+      console.log(`[support-contact] BAD_DEVICE_ID raw="${raw}" user=${req.user.email}`);
       return res.status(400).send('BAD_DEVICE_ID');
     }
-
-    const { rows } = await db.query(
-      'SELECT eui FROM devices WHERE id=$1 AND user_id=$2 LIMIT 1',
-      [id, req.user.id]
-    );
     if (!rows.length) {
       return res.status(404).send('DEVICE_NOT_FOUND');
     }
 
-    const eui = String(rows[0].eui || '').toUpperCase();
+    const eui = String(rows[0].eui || serial || '').toUpperCase();
     const info = await chirpUpdate.getDeviceDescription(eui);
 
     if (info.ok && info.description && info.description.trim() !== '') {

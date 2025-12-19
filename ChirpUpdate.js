@@ -36,7 +36,8 @@ function pickIdFieldNames(deviceObj = {}) {
   const appKey   = has('applicationId')   ? 'applicationId'   : (has('applicationID')   ? 'applicationID'   : null);
   const profKey  = has('deviceProfileId') ? 'deviceProfileId' : (has('deviceProfileID') ? 'deviceProfileID' : null);
   const devEuiKey= has('devEUI')          ? 'devEUI'          : (has('devEui')          ? 'devEui'          : 'devEUI');
-  return { appKey, profKey, devEuiKey };
+   const joinKey  = has('joinEUI')         ? 'joinEUI'         : (has('joinEui')         ? 'joinEui'         : null);
+  return { appKey, profKey, devEuiKey, joinKey };
 }
 
 // GET urządzenia z LNS
@@ -58,10 +59,12 @@ async function updateOnLns(serie, name, description) {
     return [{ ok: false, target: 'local', status: 0, error: `devEUI musi mieć 16 znaków HEX, dostałem "${devEUI}"` }];
   }
 
+    // ── 1) PROBE: najpierw sprawdź gdzie device istnieje ─────────────
+  const probes = [];
   for (const t of TARGETS) {
     const token = (process.env[t.tokenEnv] || '').trim();
     if (!token) {
-      results.push({ ok: false, target: t.name, status: 0, error: 'brak tokenu' });
+      probes.push({ t, skip: true, reason: 'no_token' });
       continue;
     }
     const headers = {
@@ -69,27 +72,53 @@ async function updateOnLns(serie, name, description) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     };
-    const devName = (name && String(name).trim()) ? String(name).trim() : devEUI;
-    // Jeśli description == null/'' → NIE nadpisujemy istniejącego opisu w LNS
-    const desc = (description != null && String(description).trim() !== '') ? String(description).trim() : null;
+
  
   
 
     try {
       // 1) Spróbuj odczytać aktualną definicję, żeby NIE zmieniać profilu
       const getResp = await getDevice(t, devEUI, headers);
+            const ok2xx = String(getResp.status).startsWith('2') && getResp.data;
+      probes.push({ t, headers, getResp, ok2xx, devObj: ok2xx ? (getResp.data.device || getResp.data) : null });
+    } catch (err) {
+      probes.push({ t, headers, getResp: null, ok2xx: false, err });
+     }
+  }
 
+  const foundSomewhere = probes.some(p => p.ok2xx);
+
+  // helpery
+  const devName = (name && String(name).trim()) ? String(name).trim() : devEUI;
+  // Jeśli description == null/'' → NIE nadpisujemy istniejącego opisu w LNS
+  const desc = (description != null && String(description).trim() !== '') ? String(description).trim() : null;
+
+  // ── 2) WŁAŚCIWE DZIAŁANIE ────────────────────────────────────────
+  for (const p of probes) {
+    const t = p.t;
+    if (p.skip) {
+      results.push({ ok: false, target: t.name, status: 0, error: 'brak tokenu' });
+      continue;
+    }
+    const headers = p.headers;
+
+    try {
       // a) ISTNIEJE → PUT z tymi samymi ID (tylko name/description)
-      if (String(getResp.status).startsWith('2') && getResp.data) {
-        const devObj = getResp.data.device || getResp.data;
+      if (p.ok2xx && p.devObj) {
+        const devObj = p.devObj;
         const foundDescription = (devObj && devObj.description != null) ? String(devObj.description) : '';
-        const { appKey, profKey, devEuiKey } = pickIdFieldNames(devObj);
+         const { appKey, profKey, devEuiKey, joinKey } = pickIdFieldNames(devObj);
 
         // składamy payload tak, aby skopiować identyfikatory dokładnie w tej samej konwencji
         const devicePayload = { device: {} };
         devicePayload.device[devEuiKey] = devEUI;
         if (appKey && devObj[appKey])  devicePayload.device[appKey]  = devObj[appKey];
         if (profKey && devObj[profKey]) devicePayload.device[profKey] = devObj[profKey];
+               // zachowaj joinEUI/joinEui jeśli jest (żeby PUT nie "zerował")
+        if (joinKey && devObj[joinKey]) devicePayload.device[joinKey] = devObj[joinKey];
+        // zachowaj tags/variables (część API lubi je wyczyścić przy PUT)
+        if (devObj && typeof devObj.tags === 'object') devicePayload.device.tags = devObj.tags;
+        if (devObj && typeof devObj.variables === 'object') devicePayload.device.variables = devObj.variables;
         devicePayload.device.name = devName;
         if (desc !== null) devicePayload.device.description = desc;
 
@@ -115,7 +144,21 @@ async function updateOnLns(serie, name, description) {
         continue;
       }
 
-      // b) NIE ISTNIEJE → POST (tu trzeba podać app/profile z konfiguracji)
+          // b) NIE ISTNIEJE
+      // Jeśli device jest znaleziony gdziekolwiek indziej → NIE twórz kopii tutaj (żadnego POST)
+      if (foundSomewhere) {
+        results.push({
+          ok: false,
+          target: t.name,
+          status: p.getResp?.status || 0,
+          foundDescription: '',
+          error: 'skipped_create_found_on_other_target',
+        });
+        continue;
+      }
+
+      // Nie znaleziono nigdzie → dopiero wtedy POST (tu trzeba podać app/profile z konfiguracji)
+   
       const appDashed  = (t.appId || '').trim();
       const profDashed = (t.profileId || '').trim();
       const appSimple  = appDashed.replace(/-/g, '');

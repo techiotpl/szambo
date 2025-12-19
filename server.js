@@ -10,6 +10,7 @@ const rateLimit  = require('express-rate-limit');
 const axios      = require('axios');
 const chirpUpdate = require('./ChirpUpdate');   //  update chirpstacka o nazwe itd
 const registerAdsRoute = require('./reklama');
+const registerAnnouncements = require('./komunikaty'); ///////////////// to co sie  wyswietla dla  klienta
 const nodemailer = require('nodemailer');
 const moment     = require('moment-timezone');
 const { Pool }   = require('pg');
@@ -668,6 +669,10 @@ function consentGuard(req, res, next) {
       res.status(500).send('server error');
     });
 }
+
+// ───────────────  OGŁOSZENIA / KOMUNIKATY  ───────────────
+registerAnnouncements({ app, db, auth, adminOnly, consentGuard });
+
 
 // GET /me/companies → firmy, które przypięły zalogowanego klienta
 // Zwraca: [{ firm_email, company, street, label }]

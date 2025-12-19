@@ -52,12 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token);
 CREATE TABLE IF NOT EXISTS announcements (
   id              BIGSERIAL PRIMARY KEY,
   title           TEXT NOT NULL,
-  body            TEXT NOT NULL,            -- tekst lub html (patrz uwaga niżej)
-  theme           TEXT NOT NULL DEFAULT 'default',  -- np. default / christmas / warning
+  body            TEXT NOT NULL,
+  theme           TEXT NOT NULL DEFAULT 'default',
   is_active       BOOLEAN NOT NULL DEFAULT TRUE,
   starts_at       TIMESTAMPTZ NULL,
   ends_at         TIMESTAMPTZ NULL,
-  min_app_version TEXT NULL,                -- opcjonalnie: targetowanie wersji
+  min_app_version TEXT NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -68,14 +68,12 @@ CREATE INDEX IF NOT EXISTS idx_announcements_active
 CREATE TABLE IF NOT EXISTS announcement_dismissals (
   id              BIGSERIAL PRIMARY KEY,
   announcement_id BIGINT NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
-  user_id         UUID NULL,                -- jeśli masz user.id w JWT
-  user_email      TEXT NULL,                -- fallback, jeśli łatwiej po mailu
+  user_id         UUID NULL,
+  user_email      TEXT NULL,
   dismissed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (announcement_id, user_id),
   UNIQUE (announcement_id, user_email)
 );
-
--- ───────────────────────── Annoucment end  ────────────────────────
 
 -- ───────────────────────── DEVICES ────────────────────────
 CREATE TABLE IF NOT EXISTS devices (
@@ -242,31 +240,29 @@ WHERE u.id = x.user_id
   AND (u.sms_limit IS NULL OR u.abonament_expiry IS NULL);
 `;
 
-const client = await db.connect();
-try {
-  await client.query('BEGIN');
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
 
-  const { rows: [{ ok }] } =
-    await client.query('SELECT pg_try_advisory_xact_lock(42) AS ok');
+    const { rows: [{ ok }] } =
+      await client.query('SELECT pg_try_advisory_xact_lock(42) AS ok');
 
-  if (!ok) {
+    if (!ok) {
+      await client.query('ROLLBACK');
+      console.log('⏩ Inna instancja trzyma lock – pomijam migrację');
+      return;
+    }
+
+    await client.query(MIGRATION_SQL);
+    await client.query('COMMIT');
+    console.log('✅ Migration executed.');
+  } catch (e) {
     await client.query('ROLLBACK');
-    console.log('⏩ Inna instancja trzyma lock – pomijam migrację');
-    return;
+    console.error('❌ Migration error:', e);
+    throw e;
+  } finally {
+    client.release();
   }
-
-  await client.query(MIGRATION_SQL);
-  await client.query('COMMIT');
-  console.log('✅ Migration executed.');
-} catch (e) {
-  await client.query('ROLLBACK');
-  console.error('❌ Migration error:', e);
-  throw e;
-} finally {
-  client.release();
 }
-
-
-
 
 module.exports = { runMigration };

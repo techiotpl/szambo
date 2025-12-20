@@ -67,6 +67,22 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
   if (typeof adminOnly !== 'function') throw new Error('komunikaty.js: missing adminOnly middleware');
   if (typeof consentGuard !== 'function') throw new Error('komunikaty.js: missing consentGuard middleware');
 
+    // wspólny warunek: "nie pokazuj, jeśli user już zamknął"
+  function _notDismissedWhere() {
+    return `
+      NOT EXISTS (
+        SELECT 1
+          FROM announcement_dismissals d
+         WHERE d.announcement_id = a.id
+           AND (
+             ($1::uuid IS NOT NULL AND d.user_id = $1::uuid)
+             OR
+             ($2::text IS NOT NULL AND $2::text <> '' AND lower(d.user_email) = lower($2::text))
+           )
+      )
+    `;
+  }
+
   // ── USER: pobierz aktualne ogłoszenia (których user nie zamknął)
   app.get('/announcements', auth, consentGuard, async (req, res) => {
     try {
@@ -75,13 +91,8 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
           FROM announcements a
          WHERE a.is_active = TRUE
            AND (a.starts_at IS NULL OR a.starts_at <= now())
-           AND (a.ends_at   IS NULL OR a.ends_at   > now())
-           AND NOT EXISTS (
-             SELECT 1
-               FROM announcement_dismissals d
-              WHERE d.announcement_id = a.id
-                AND (d.user_id = $1::uuid OR lower(d.user_email) = lower($2))
-           )
+                     AND (a.ends_at   IS NULL OR a.ends_at   >= now())
+           AND ${_notDismissedWhere()}
          ORDER BY a.created_at DESC
          LIMIT 20
       `;
@@ -95,6 +106,37 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
     }
   });
 
+  // ── USER: pobierz JEDNO aktywne ogłoszenie (dla appki: /announcements/active)
+  app.get('/announcements/active', auth, consentGuard, async (req, res) => {
+    try {
+      const q = `
+        SELECT a.id, a.title, a.body, a.theme, a.starts_at, a.ends_at, a.min_app_version, a.created_at, a.updated_at
+          FROM announcements a
+         WHERE a.is_active = TRUE
+           AND (a.starts_at IS NULL OR a.starts_at <= now())
+           AND (a.ends_at   IS NULL OR a.ends_at   >= now())
+           AND ${_notDismissedWhere()}
+         ORDER BY a.created_at DESC
+         LIMIT 1
+      `;
+      const userId = (req.user?.id && req.user.id !== 'admin') ? req.user.id : null;
+      const userEmail = req.user?.email || '';
+      const { rows } = await db.query(q, [userId, userEmail]);
+
+      if (!rows.length) {
+        console.log(`ℹ️ GET /announcements/active -> none (user=${userEmail || userId || 'unknown'})`);
+        return res.sendStatus(204); // Flutter oczekuje 204 -> null
+      }
+
+      console.log(`✅ GET /announcements/active -> id=${rows[0].id} (user=${userEmail || userId || 'unknown'})`);
+      return res.json(rows[0]);
+    } catch (e) {
+      console.error('GET /announcements/active error:', e);
+      return res.status(500).send('server error');
+    }
+  });
+
+  
   // ── USER: oznacz jako przeczytane / zamknięte
   app.post('/announcements/:id/dismiss', auth, consentGuard, async (req, res) => {
     try {
@@ -111,6 +153,7 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
         [id, userId, userEmail]
       );
 
+      console.log(`✅ POST /announcements/${id}/dismiss (user=${userEmail || userId || 'unknown'})`);
       return res.sendStatus(200);
     } catch (e) {
       console.error('POST /announcements/:id/dismiss error:', e);
@@ -153,7 +196,7 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
          RETURNING id, title, theme, created_at`,
         [title, body, theme, startsAt, endsAt, minVer]
       );
-
+console.log(`✅ Published announcement id=${rows[0].id} template=${templateKey} starts_at=${startsAt || 'null'} ends_at=${endsAt || 'null'} min_ver=${minVer || 'null'}`);
       return res.status(201).json({ ok: true, announcement: rows[0] });
     } catch (e) {
       console.error('POST /admin/announcements/publish-template error:', e);

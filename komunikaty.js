@@ -2,6 +2,16 @@
 // Ogłoszenia (Announcements) — templates + publish + dismiss
 // Eksport: registerAnnouncements({ app, db, auth, adminOnly, consentGuard })
 
+// Postgres helper: zrób z HTML tekst (proste usunięcie tagów)
+// Uwaga: to jest "good enough" na nasze szablony.
+// Jeśli kiedyś będziesz miał bardziej złożony HTML, wtedy można dodać lepszy sanitizer.
+function stripHtmlSql(expr) {
+  // usuwa tagi <...>
+  return `regexp_replace(${expr}, '<[^>]+>', '', 'g')`;
+}
+
+
+
 function renderTpl(str, vars = {}) {
   return String(str || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, k) =>
     (vars[k] != null ? String(vars[k]) : '')
@@ -66,6 +76,7 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
   if (typeof auth !== 'function') throw new Error('komunikaty.js: missing auth middleware');
   if (typeof adminOnly !== 'function') throw new Error('komunikaty.js: missing adminOnly middleware');
   if (typeof consentGuard !== 'function') throw new Error('komunikaty.js: missing consentGuard middleware');
+  const BODY_TEXT = stripHtmlSql('a.body');
 
     // wspólny warunek: "nie pokazuj, jeśli user już zamknął"
   function _notDismissedWhere() {
@@ -87,7 +98,14 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
   app.get('/announcements', auth, consentGuard, async (req, res) => {
     try {
       const q = `
-        SELECT a.id, a.title, a.body, a.theme, a.starts_at, a.ends_at, a.min_app_version, a.created_at, a.updated_at
+               SELECT
+          a.id,
+          a.title,
+          ${BODY_TEXT} AS body,     -- plaintext do aplikacji
+          a.body        AS body_html, -- zostawiamy HTML na przyszłość
+          a.theme,
+          a.starts_at, a.ends_at, a.min_app_version,
+          a.created_at, a.updated_at
           FROM announcements a
          WHERE a.is_active = TRUE
            AND (a.starts_at IS NULL OR a.starts_at <= now())
@@ -110,7 +128,14 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
   app.get('/announcements/active', auth, consentGuard, async (req, res) => {
     try {
       const q = `
-        SELECT a.id, a.title, a.body, a.theme, a.starts_at, a.ends_at, a.min_app_version, a.created_at, a.updated_at
+               SELECT
+          a.id,
+          a.title,
+          ${BODY_TEXT} AS body,        -- plaintext do aplikacji
+          a.body        AS body_html,  -- HTML zostaje
+          a.theme,
+          a.starts_at, a.ends_at, a.min_app_version,
+          a.created_at, a.updated_at
           FROM announcements a
          WHERE a.is_active = TRUE
            AND (a.starts_at IS NULL OR a.starts_at <= now())
@@ -154,7 +179,8 @@ function registerAnnouncements({ app, db, auth, adminOnly, consentGuard }) {
       );
 
       console.log(`✅ POST /announcements/${id}/dismiss (user=${userEmail || userId || 'unknown'})`);
-      return res.sendStatus(200);
+         // ważne: zwracamy JSON, żeby Flutter nie próbował parsować pustego body
+      return res.status(200).json({ ok: true });
     } catch (e) {
       console.error('POST /announcements/:id/dismiss error:', e);
       return res.status(500).send('server error');

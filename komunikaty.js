@@ -227,6 +227,35 @@ console.log(`✅ Published announcement id=${rows[0].id} template=${templateKey}
     }
   });
 
+  // ── ADMIN: lista ogłoszeń do panelu (żeby było widać ID / od-do / aktywne)
+  app.get('/admin/announcements', auth, adminOnly, async (req, res) => {
+    try {
+      // ?active=1 -> tylko aktywne; domyślnie zwracamy wszystkie ostatnie
+      const onlyActive = String(req.query.active || '') === '1';
+
+      const sql = `
+        SELECT
+          id, title, theme, is_active,
+          starts_at, ends_at,
+          created_at, updated_at
+        FROM announcements
+        ${onlyActive ? 'WHERE is_active = TRUE' : ''}
+        ORDER BY created_at DESC
+        LIMIT 50
+      `;
+
+      const r = await db.query(sql);
+      return res.json(r.rows);
+    } catch (e) {
+      console.error('GET /admin/announcements error:', e);
+      return res.status(500).send('server error');
+    }
+  });
+
+
+
+
+  
   console.log('✅ Announcements routes registered (/announcements, /admin/announcements/*)');
 }
 

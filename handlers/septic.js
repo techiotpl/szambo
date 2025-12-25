@@ -49,6 +49,9 @@ module.exports.handleUplink = async function handleUplink(utils, dev, body) {
   const obj    = body.object || {};           // część z dekodera
   const snr    = body.rxInfo?.[0]?.snr ?? null;
 
+    // Czy w tym uplinku jest issue=1 (nawet jeśli są też distance/voltage)?
+  const issueInPayload = (obj.issue === 1 || obj.issue === '1');
+
   const keys        = Object.keys(obj || {});
   const issue0Only  = (keys.length === 1) && (obj.issue === 0 || obj.issue === '0');
   const issue1Only  = (keys.length === 1) && (obj.issue === 1 || obj.issue === '1');
@@ -93,7 +96,7 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     }
 
     // mail wewnętrzny (opcjonalny)
-    try { await sendEmail('biuro@techiot.pl', `ISSUE(1) – ${devEui}`, `<p>${nowIso}</p>`); }
+    try { await sendEmail('biuro@techiot.pl', `ISSUE(1) – ${devEui}`, `<p>${tsIso}</p>`); }
     catch (err) { /* ignore */ }
 
     // 3) SSE – podajemy ts_seen (i ts dla kompatybilności z frontem)
@@ -260,42 +263,69 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
     }
   }
 
-  // ─────────────── PRÓG ALARMOWY (flaga FALSE → TRUE) ─────────────────────
+   // ─────────────── PRÓG ALARMOWY (flaga FALSE → TRUE) ─────────────────────
   if (!dev.trigger_dist && row.new_flag) {
     const toNumbers = [];
     if (row.phone)  toNumbers.push(normalisePhone(row.phone));
     if (row.phone2) toNumbers.push(normalisePhone(row.phone2));
 
-    // SMS-y (jeśli mamy limit)
-   
-    const msgBase = `⚠️ Poziom w zbiorniku ${distance} cm (próg ${row.red_cm} cm)`;
+    const msgBase = `⚠️ Poziom w zbiorniku: ${distance} cm (próg: ${row.red_cm} cm).`;
+
+    // Jeśli issue=1 przyszło w tym samym uplinku co przekroczenie progu:
+    // - ostrzegamy usera, że pomiar może być błędny (np. zaparowanie / zabrudzenie czujnika)
+    // - jeśli jest tel_do_szambiarza -> NIE wysyłamy do firmy
+    let msgToUser = msgBase;
+
+    if (issueInPayload) {
+      if (row.tel_do_szambiarza) {
+        msgToUser =
+          `⚠️ Poziom w zbiorniku: ${distance} cm (próg: ${row.red_cm} cm).\n` +
+          `Uwaga: czujnik zgłosił możliwe zaparowanie/zabrudzenie – pomiar może być niedokładny.\n` +
+          `SMS do firmy asenizacyjnej NIE został wysłany.`;
+      } else {
+        msgToUser =
+          `⚠️ Poziom w zbiorniku: ${distance} cm (próg: ${row.red_cm} cm).\n` +
+          `Uwaga: czujnik zgłosił możliwe zaparowanie/zabrudzenie – pomiar może być niedokładny.\n` +
+          `Sprawdź czujnik (np. czy nie jest zaparowany).`;
+      }
+    }
+
+    // SMS-y do usera (quota decyduje)
     for (const num of toNumbers) {
       if (!num) continue;
       try {
-        const ok = await sendSmsWithQuota(db, dev.user_id, num, msgBase, 'threshold');
-        if (!ok) break; // zabrakło SMS-ów w globalnej puli
+        const ok = await sendSmsWithQuota(db, dev.user_id, num, msgToUser, 'threshold');
+        if (!ok) break; // zabrakło SMS-ów w puli
+      } catch (e) {
+        console.error('SMS err', e);
       }
-      catch (e) { console.error('SMS err', e); }
     }
-    // SMS do szambiarza (spróbuj, jeśli są jeszcze SMS-y)
-    if (row.tel_do_szambiarza) {
+
+    // SMS do szambiarza: tylko jeśli mamy numer i NIE ma issue=1 w tym uplinku
+    if (row.tel_do_szambiarza && !issueInPayload) {
       const szam = normalisePhone(row.tel_do_szambiarza);
       if (szam) {
         const msg2 = `${row.street || '(brak adresu)'} – zbiornik pełny. Proszę o opróżnienie.`;
         try {
           await sendSmsWithQuota(db, dev.user_id, szam, msg2, 'szambiarz');
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          /* ignore */
+        }
       }
     }
 
-
-    // e-mail
+    // e-mail do usera (jeśli ustawiony)
     if (row.alert_email) {
-      const html = `<p>${msgBase}</p>`;
-      try { await sendEmail(row.alert_email, '⚠️ Pełny zbiornik', html); }
-      catch (e) { /* ignore */ }
+      const subject = `⚠️ Alert poziomu – ${devEui}`;
+      const html = `<p>${(issueInPayload ? msgToUser : msgBase).replace(/\n/g, '<br/>')}</p>`;
+      try {
+        await sendEmail(row.alert_email, subject, html);
+      } catch (e) {
+        /* ignore */
+      }
     }
   }
+
 
   // ─────────────── SSE do front-endu ──────────────────────────────────────
   sendEvent({ serial: devEui, distance, voltage, snr, ts: tsIso, ts_seen: tsIso });

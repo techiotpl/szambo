@@ -129,7 +129,7 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
 
   // === FILTR: odrzucamy ewidentnie błędne pomiary (np. distance > 400 cm) ===
   const distanceNum = (distance === null) ? null : Number(distance);
-  if (distanceNum !== null && Number.isFinite(distanceNum) && distanceNum > 200) {
+  if (distanceNum !== null && Number.isFinite(distanceNum) && distanceNum > 400) {
     // aktualizujemy tylko "ostatnio widziany" + meta, ale NIE wysyłamy distance do frontu
     await db.query(
       `UPDATE devices

@@ -127,6 +127,29 @@ smsSent = await sendSmsWithQuota(db, dev.user_id, num, msg, 'issue');
   const distance = obj.distance ?? null;        // cm
   const voltage  = obj.voltage  ?? null;        // V
 
+  // === FILTR: odrzucamy ewidentnie błędne pomiary (np. distance > 400 cm) ===
+  const distanceNum = (distance === null) ? null : Number(distance);
+  if (distanceNum !== null && Number.isFinite(distanceNum) && distanceNum > 200) {
+    // aktualizujemy tylko "ostatnio widziany" + meta, ale NIE wysyłamy distance do frontu
+    await db.query(
+      `UPDATE devices
+          SET params = (
+                COALESCE(params,'{}') - 'issue' - 'issue_ts'
+              ) || jsonb_strip_nulls(
+                    jsonb_build_object(
+                      'ts_seen', $2::text,
+                      'snr',     $3::numeric,
+                      'voltage', $4::numeric
+                    )
+                 )
+        WHERE id = $1`,
+      [dev.id, tsIso, snr, voltage]
+    );
+    sendEvent({ serial: devEui, voltage, snr, ts_seen: tsIso });
+    return;
+  }
+  
+
   // Jeżeli mamy odległość → zapisz punkt w measurements (z TS po stronie DB)
   if (distance !== null) {
     await db.query(
